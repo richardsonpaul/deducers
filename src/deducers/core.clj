@@ -34,19 +34,16 @@
 (defprotocol Applicative
   (<*> [af f]))
 
-(def ^:dynamic *pure-fn* identity)
-
 (defprotocol Monad
-  (bind [this f])
-  (join [this]))
+  (join [nested]))
 
 (defn >>= [mv & [mf & mfs]]
   (if mf
-    (recur (bind mv mf) mfs)
+    (recur (-> mv (fmap mf) join) mfs)
     mv))
 
 (defn- process [[[v b] & more] body]
-  `(bind ~b (fn [~v] ~(if more (process more body) body))))
+  `(>>= ~b (fn [~v] ~(if more (process more body) body))))
 
 (defmacro deduce [defs expr]
   (process (partition 2 defs) expr))
@@ -70,11 +67,19 @@
   Applicative
   (<*> [_ o] (-> (fmap o just)))
   Monad
-  (bind [_ f] (binding [*pure-fn* #(Just. %)] (-> just f Just. join)))
   (join [_] just))
 
 (defmethod print-method Just [m w]
   (print-method (symbol (str m)) w))
+
+(defrecord Writer [v out]
+  Functor
+  (fmap [_ fn]
+    (Writer. (fn v) out))
+  Applicative
+  Monad
+  (join [_]
+    (Writer. (:v v) (clojure.string/join "; " [out (:out v)]))))
 
 (extend-type nil
   Maybe
@@ -84,4 +89,4 @@
   Applicative
   (<*> [_ _])
   Monad
-  (bind [_ _]))
+  (join [_]))
