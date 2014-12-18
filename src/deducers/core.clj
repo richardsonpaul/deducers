@@ -1,10 +1,10 @@
-(ns deducers.core)
+(ns deducers.core
+  (:require clojure.edn))
 
 (defprotocol Functor
   (fmap [this f]))
 
 (extend-protocol Functor
-  ;; TODO - Not adhering to Functor: List
   clojure.lang.Seqable
   (fmap [this f]
     (into (empty this) (map f) this))
@@ -13,16 +13,13 @@
     (into {} (map (fn [[k v]] [k (f v)])) this))
   clojure.lang.Fn
   (fmap [this f]
-    (comp f this))
-  java.lang.Object
-  (fmap [this f]
-    (f this)))
-
-(defprotocol Applicative
-  (<*> [af f]))
+    (comp f this)))
 
 (defprotocol Monad
   (join [nested]))
+
+(defprotocol Accumulator
+  (accumulate [this x]))
 
 (defn >>= [mv & [mf & mfs]]
   (if mf
@@ -51,34 +48,34 @@
   (maybe [_] just)
   Functor
   (fmap [_ f] (-> (f just) Just.))
-  Applicative
-  (<*> [_ o] (-> (fmap o just)))
   Monad
   (join [_] just))
 
 (defmethod print-method Just [m w]
   (print-method (symbol (str m)) w))
 
-(defrecord Writer [v out]
+;; Writer
+
+(defrecord Acc [v a]
   Functor
-  (fmap [_ fn]
-    (Writer. (fn v) out))
-  Applicative
+  (fmap [_ f] (Acc. (f v) a))
   Monad
-  (join [_]
-    (Writer. (:v v) (clojure.string/join "; " [out (:out v)]))))
+  (join [nested]
+    (Acc. (:v v) (accumulate a (:a v)))))
+
+;; Extensions on clojure.core
 
 (extend-type nil
   Maybe
   (maybe [_])
   Functor
   (fmap [this f])
-  Applicative
-  (<*> [_ _])
   Monad
   (join [_]))
 
 (extend Object
+  Maybe
+  {:maybe identity}
   Functor
   {:fmap (fn [o f] (f o))}
   Monad
@@ -88,3 +85,11 @@
   Functor
   (fmap [this f]
     (apply list (map f this))))
+
+(extend-type String
+  Functor
+  (fmap [s f] (pr-str (f (clojure.edn/read-string s))))
+  Monad
+  (join [s] (clojure.edn/read-string s))
+  Accumulator
+  (accumulate [this x] (str this x)))
