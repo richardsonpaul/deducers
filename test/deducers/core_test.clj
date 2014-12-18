@@ -54,3 +54,7 @@
 (defspec test-functor-seq 100
   (prop/for-all [m (gen/list gen/int)]
     (functor? (map inc m) inc #(* 2 %))))
+
+(defspec test-functor-queue 100
+  (prop/for-all [m (gen/list gen/int)]
+    (functor? (into clojure.lang.PersistentQueue/EMPTY m) inc #(* 2 %))))
