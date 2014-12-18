@@ -13,23 +13,10 @@
     (into {} (map (fn [[k v]] [k (f v)])) this))
   clojure.lang.Fn
   (fmap [this f]
-    (comp this f))
+    (comp f this))
   java.lang.Object
   (fmap [this f]
     (f this)))
-
-(defn functor?
-  "Test an object to see if it adheres to the functor laws.
-  f and g are functions that operate on the functor"
-  [ftor f g]
-  (let [id (fmap ftor identity)
-        composed (fmap ftor (comp f g))
-        nested (fmap (fmap ftor g) f)
-        follows-laws? (and (= id (identity ftor)) (= composed nested))]
-    (when-not follows-laws?
-      (println "Identity fmapped:" id)
-      (println "Composed:" (str composed "; Nested:") nested))
-    follows-laws?))
 
 (defprotocol Applicative
   (<*> [af f]))
@@ -90,3 +77,8 @@
   (<*> [_ _])
   Monad
   (join [_]))
+
+(extend-type clojure.lang.ISeq
+  Functor
+  (fmap [this f]
+    (apply list (map f this))))
