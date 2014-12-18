@@ -1,6 +1,8 @@
 (ns deducers.core
   (:require clojure.edn))
 
+;; Protocols
+
 (defprotocol Functor
   (fmap [this f]))
 
@@ -26,16 +28,28 @@
     (recur (-> mv (fmap mf) join) mfs)
     mv))
 
-(defn- process [[[v b] & more] body]
-  `(>>= ~b (fn [~v] ~(if more (process more body) body))))
+(defn- wrap-with [deducer form]
+  (if deducer
+    (list deducer form)
+    form))
 
-(defmacro deduce [defs expr]
-  (process (partition 2 defs) expr))
+(defn- process [deducer [[v b] & more] body]
+  `(>>= ~(wrap-with deducer b)
+        (fn [~v]
+          ~(if more
+             (process deducer more body)
+             (wrap-with deducer (cons `do body))))))
+
+(defmacro deduce [bindings & exprs]
+  `(deduce-with nil ~bindings ~@exprs))
+
+(defmacro deduce-with [deducer bindings & exprs]
+  (process deducer (partition 2 bindings) exprs))
 
 ;;;; Maybe: safe failure
 
 (defprotocol Maybe
-  (maybe [this]))
+  (maybe? [this]))
 
 (deftype Just [just]
   java.lang.Object
@@ -45,7 +59,7 @@
                             (instance? Just other)
                             (= just (.just other))))
   Maybe
-  (maybe [_] just)
+  (maybe? [_] just)
   Functor
   (fmap [_ f] (-> (f just) Just.))
   Monad
@@ -54,20 +68,23 @@
 (defmethod print-method Just [m w]
   (print-method (symbol (str m)) w))
 
+(defn maybe [x]
+  (if x (Just. x)))
+
 ;; Writer
 
-(defrecord Acc [v a]
+(defrecord Acc [acc value]
   Functor
-  (fmap [_ f] (Acc. (f v) a))
+  (fmap [_ func] (Acc. acc (func value)))
   Monad
-  (join [nested]
-    (Acc. (:v v) (accumulate a (:a v)))))
+  (join [_]
+    (assoc value :acc (accumulate acc (:acc value)))))
 
 ;; Extensions on clojure.core
 
 (extend-type nil
   Maybe
-  (maybe [_])
+  (maybe? [_])
   Functor
   (fmap [this f])
   Monad
@@ -75,7 +92,7 @@
 
 (extend Object
   Maybe
-  {:maybe identity}
+  {:maybe? identity}
   Functor
   {:fmap (fn [o f] (f o))}
   Monad
@@ -93,3 +110,8 @@
   (join [s] (clojure.edn/read-string s))
   Accumulator
   (accumulate [this x] (str this x)))
+
+;; Miscellanea
+
+(defmacro let-safe [bindings & forms]
+  `(maybe? (deduce-with maybe ~bindings ~@forms)))

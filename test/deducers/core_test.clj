@@ -58,3 +58,17 @@
 (defspec test-functor-queue 100
   (prop/for-all [m (gen/list gen/int)]
     (functor? (into clojure.lang.PersistentQueue/EMPTY m) inc #(* 2 %))))
+
+(test/deftest test-deduce-with
+  (let [log-str "Did something"
+        log-something (partial ->Acc log-str)]
+    (test/is (= (->Acc (clojure.string/join (repeat 3 log-str)) 6)
+              (deduce-with log-something
+                           [x 3
+                            y (inc x)]
+                           (+ y 2))))))
+
+(test/deftest test-safe-let
+  (let [let-test #(let-safe [x % y (+ x 4)] (* x y))]
+    (test/is (= 21 (let-test 3)))
+    (test/is (nil? (let-test nil)))))
