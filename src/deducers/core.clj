@@ -78,6 +78,12 @@
   Monad
   (join [_]))
 
+(extend Object
+  Functor
+  {:fmap (fn [o f] (f o))}
+  Monad
+  {:join identity})
+
 (extend-type clojure.lang.ISeq
   Functor
   (fmap [this f]
