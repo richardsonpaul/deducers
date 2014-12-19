@@ -94,14 +94,17 @@
   Maybe
   {:maybe? identity}
   Functor
-  {:fmap (fn [o f] (f o))}
+  {:fmap (fn [o f] (Just. (f o)))}
   Monad
   {:join identity})
 
 (extend-type clojure.lang.ISeq
   Functor
   (fmap [this f]
-    (apply list (map f this))))
+    (apply list (map f this)))
+  Monad
+  (join [nested]
+    (apply concat nested)))
 
 (extend-type String
   Functor

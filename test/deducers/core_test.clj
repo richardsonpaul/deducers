@@ -72,3 +72,7 @@
   (let [let-test #(let-safe [x % y (+ x 4)] (* x y))]
     (test/is (= 21 (let-test 3)))
     (test/is (nil? (let-test nil)))))
+
+(test/deftest test-implicit-context
+  (test/is (= [[3 0 0] [3 1 0] [3 1 1] [3 2 0] [3 2 1] [3 2 2]]
+              (deduce [x 3 y (range x) z (range (inc y))] (list [x y z])))))
