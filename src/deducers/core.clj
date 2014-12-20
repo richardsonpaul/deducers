@@ -28,23 +28,22 @@
     (recur (-> mv (fmap mf) join) mfs)
     mv))
 
-(defn- wrap-with [deducer form]
-  (if deducer
-    (list deducer form)
-    form))
-
-(defn- process [deducer [[v b] & more] body]
-  `(>>= ~(wrap-with deducer b)
+(defn- process [[[v b] & more] body]
+  `(>>= ~b
         (fn [~v]
           ~(if more
-             (process deducer more body)
-             (wrap-with deducer (cons `do body))))))
+             (process more body)
+             body))))
 
-(defmacro deduce [bindings & exprs]
-  `(deduce-with nil ~bindings ~@exprs))
+(defmacro deduce [defs & body]
+  (process (partition 2 defs) (cons `do body)))
 
-(defmacro deduce-with [deducer bindings & exprs]
-  (process deducer (partition 2 bindings) exprs))
+(defmacro deduce-with [wrap-fn defs & body]
+  (list `deduce
+         (interleave
+          (take-nth 2 defs)
+          (->> defs (drop 1) (take-nth 2) (map #(list wrap-fn %))))
+         (list wrap-fn (list* `do body))))
 
 ;;;; Maybe: safe failure
 
