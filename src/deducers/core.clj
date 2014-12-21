@@ -7,9 +7,6 @@
   (apply-to [this f]))
 
 (extend-protocol ApplySpecial
-  clojure.lang.Seqable
-  (apply-to [this f]
-    (into (empty this) (map f) this))
   clojure.lang.IPersistentMap
   (apply-to [this f]
     (into {} (map (fn [[k v]] [k (f v)])) this))
@@ -20,39 +17,37 @@
 (defprotocol Deducer
   (handle-nested [nested]))
 
-(defprotocol DeducingFn
-  (deduce-with [this f]))
+(defprotocol ^:private Binding
+             "Dispatch >>= polymorphically"
+             (bind
+               [seq-or-obj v]
+               [seq-or-obj v d]))
 
 (defprotocol Accumulator
   (accum [this x]))
 
 (defn >>=
-  ([mv [mf & mfs]]
-     (if mf
-       (recur (deduce-with mv mf) mfs)
-       mv))
-  ([df mv [mf & mfs]]
-     (df)))
+  "Iteratively deduce the value mv throught the function(s) mfs,
+  wrapping with the given deducer constructor d, if given.
+  Can pass a Seqable of fns or a single fn for mfs, dispatches polymorphically."
+  ([mv mfs]
+   (bind mfs mv))
+  ([mv d mfs]
+   (bind mfs mv d)))
 
-(defn- process [[[v b] & more] body]
+(defn- process [deducer [[v b] & more] body]
   `(>>= ~b
         (fn [~v]
           ~(if more
-             (process more body)
-             body))))
+             (process deducer more body)
+             (cons `do body)))
+        deducer))
 
-(defmacro deduce [defs & body]
-  (process (partition 2 defs) (cons `do body)))
+(defmacro deduce [bindings & exprs]
+  `(deduce-with nil ~bindings ~@exprs))
 
-(defmacro deduce-using [wrap-fn defs & body]
-  (list `deduce
-         (interleave
-          (take-nth 2 defs)
-          (->> defs (drop 1) (take-nth 2) (map #(list wrap-fn %))))
-         (list wrap-fn (list* `do body))))
-
-(defn deducing-fn [f v]
-  (-> mv (apply-to f) handle-nested))
+(defmacro deduce-with [deducer bindings & exprs]
+  (process deducer (partition 2 bindings) exprs))
 
 ;;;; Maybe: safe failure
 
@@ -117,8 +112,25 @@
   {:apply-to (fn [o f] (Just. (f o)))}
   Deducer
   {:handle-nested identity}
-  DeducingFn
-  {:deduce-with deducing-fn})
+  Binding
+  {:bind (fn
+           ([mf mv d]
+            (let [result (bind mf mv)]
+              (if d
+                (d result)
+                result)))
+           ([mf mv]
+            (-> mv (apply-to mf) handle-nested)))})
+
+(extend-type clojure.lang.Seqable
+  ApplySpecial
+  (apply-to [this f]
+    (into (empty this) (map f) this))
+  Binding
+  (bind [[mf & mfs] v d]
+    (recur mfs (bind mf v d)))
+  (bind [mfs v]
+    (bind mfs v nil)))
 
 (extend-type clojure.lang.ISeq
   ApplySpecial
