@@ -7,9 +7,6 @@
   (fmap [this f]))
 
 (extend-protocol Functor
-  clojure.lang.Seqable
-  (fmap [this f]
-    (into (empty this) (map f) this))
   clojure.lang.IPersistentMap
   (fmap [this f]
     (into {} (map (fn [[k v]] [k (f v)])) this))
@@ -20,13 +17,23 @@
 (defprotocol Monad
   (join [nested]))
 
+(defprotocol ^:private Binding
+             "Dispatch >>= polymorphically"
+             (bind
+               [seq-or-obj v]
+               [seq-or-obj v d]))
+
 (defprotocol Accumulator
   (accumulate [this x]))
 
-(defn >>= [mv & [mf & mfs]]
-  (if mf
-    (recur (-> mv (fmap mf) join) mfs)
-    mv))
+(defn >>=
+  "Iteratively deduce the value mv throught the function(s) mfs,
+  wrapping with the given deducer constructor d, if given.
+  Can pass a Seqable of fns or a single fn for mfs, dispatches polymorphically."
+  ([mv mfs]
+   (bind mfs mv))
+  ([mv d mfs]
+   (bind mfs mv d)))
 
 (defn- wrap-with [deducer form]
   (if deducer
@@ -34,11 +41,12 @@
     form))
 
 (defn- process [deducer [[v b] & more] body]
-  `(>>= ~(wrap-with deducer b)
+  `(>>= ~b
         (fn [~v]
           ~(if more
              (process deducer more body)
-             (wrap-with deducer (cons `do body))))))
+             (cons `do body)))
+        deducer))
 
 (defmacro deduce [bindings & exprs]
   `(deduce-with nil ~bindings ~@exprs))
@@ -96,7 +104,26 @@
   Functor
   {:fmap (fn [o f] (Just. (f o)))}
   Monad
-  {:join identity})
+  {:join identity}
+  Binding
+  {:bind (fn
+           ([mf mv d]
+            (let [result (bind mf mv)]
+              (if d
+                (d result)
+                result)))
+           ([mf mv]
+            (foo mv mf)))})
+
+(extend-type clojure.lang.Seqable
+  Functor
+  (fmap [this f]
+    (into (empty this) (map f) this))
+  Binding
+  (bind [[mf & mfs] v d]
+    (recur mfs (bind mf v d)))
+  (bind [mfs v]
+    (bind mfs v nil)))
 
 (extend-type clojure.lang.ISeq
   Functor
