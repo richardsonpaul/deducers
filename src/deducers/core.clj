@@ -35,11 +35,6 @@
   ([mv d mfs]
    (bind mfs mv d)))
 
-(defn- wrap-with [deducer form]
-  (if deducer
-    (list deducer form)
-    form))
-
 (defn- process [deducer [[v b] & more] body]
   `(>>= ~b
         (fn [~v]
