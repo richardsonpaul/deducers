@@ -3,30 +3,36 @@
 
 ;; Protocols
 
-(defprotocol Functor
-  (fmap [this f]))
+(defprotocol ApplySpecial
+  (apply-to [this f]))
 
-(extend-protocol Functor
+(extend-protocol ApplySpecial
   clojure.lang.Seqable
-  (fmap [this f]
+  (apply-to [this f]
     (into (empty this) (map f) this))
   clojure.lang.IPersistentMap
-  (fmap [this f]
+  (apply-to [this f]
     (into {} (map (fn [[k v]] [k (f v)])) this))
   clojure.lang.Fn
-  (fmap [this f]
+  (apply-to [this f]
     (comp f this)))
 
-(defprotocol Monad
-  (join [nested]))
+(defprotocol Deducer
+  (handle-nested [nested]))
+
+(defprotocol DeducingFn
+  (deduce-with [this f]))
 
 (defprotocol Accumulator
-  (accumulate [this x]))
+  (accum [this x]))
 
-(defn >>= [mv & [mf & mfs]]
-  (if mf
-    (recur (-> mv (fmap mf) join) mfs)
-    mv))
+(defn >>=
+  ([mv [mf & mfs]]
+     (if mf
+       (recur (deduce-with mv mf) mfs)
+       mv))
+  ([df mv [mf & mfs]]
+     (df)))
 
 (defn- process [[[v b] & more] body]
   `(>>= ~b
@@ -38,12 +44,15 @@
 (defmacro deduce [defs & body]
   (process (partition 2 defs) (cons `do body)))
 
-(defmacro deduce-with [wrap-fn defs & body]
+(defmacro deduce-using [wrap-fn defs & body]
   (list `deduce
          (interleave
           (take-nth 2 defs)
           (->> defs (drop 1) (take-nth 2) (map #(list wrap-fn %))))
          (list wrap-fn (list* `do body))))
+
+(defn deducing-fn [f v]
+  (-> mv (apply-to f) handle-nested))
 
 ;;;; Maybe: safe failure
 
@@ -59,10 +68,10 @@
                             (= just (.just other))))
   Maybe
   (maybe? [_] just)
-  Functor
-  (fmap [_ f] (-> (f just) Just.))
-  Monad
-  (join [_] just))
+  ApplySpecial
+  (apply-to [_ f] (-> (f just) Just.))
+  Deducer
+  (handle-nested [_] just))
 
 (defmethod print-method Just [m w]
   (print-method (symbol (str m)) w))
@@ -73,47 +82,61 @@
 ;; Writer
 
 (defrecord Acc [acc value]
-  Functor
-  (fmap [_ func] (Acc. acc (func value)))
-  Monad
-  (join [_]
-    (assoc value :acc (accumulate acc (:acc value)))))
+  ApplySpecial
+  (apply-to [_ func] (Acc. acc (func value)))
+  Deducer
+  (handle-nested [_]
+    (assoc value :acc (accum acc (:acc value)))))
+
+;; Ad-hoc
+
+(defrecord AdHocDeducer [a-to h-nest a-de value]
+  ApplySpecial
+  (apply-to [this f]
+    (update this :value assoc (a-to value f)))
+  Deducer
+  (handle-nested [this]
+    (update this :value assoc h-nest))
+  DeducingFn
+  (deduce-with [this f]))
 
 ;; Extensions on clojure.core
 
 (extend-type nil
   Maybe
   (maybe? [_])
-  Functor
-  (fmap [this f])
-  Monad
-  (join [_]))
+  ApplySpecial
+  (apply-to [this f])
+  Deducer
+  (handle-nested [_]))
 
 (extend Object
   Maybe
   {:maybe? identity}
-  Functor
-  {:fmap (fn [o f] (Just. (f o)))}
-  Monad
-  {:join identity})
+  ApplySpecial
+  {:apply-to (fn [o f] (Just. (f o)))}
+  Deducer
+  {:handle-nested identity}
+  DeducingFn
+  {:deduce-with deducing-fn})
 
 (extend-type clojure.lang.ISeq
-  Functor
-  (fmap [this f]
+  ApplySpecial
+  (apply-to [this f]
     (apply list (map f this)))
-  Monad
-  (join [nested]
+  Deducer
+  (handle-nested [nested]
     (apply concat nested)))
 
 (extend-type String
-  Functor
-  (fmap [s f] (pr-str (f (clojure.edn/read-string s))))
-  Monad
-  (join [s] (clojure.edn/read-string s))
+  ApplySpecial
+  (apply-to [s f] (pr-str (f (clojure.edn/read-string s))))
+  Deducer
+  (handle-nested [s] (clojure.edn/read-string s))
   Accumulator
-  (accumulate [this x] (str this x)))
+  (accum [this x] (str this x)))
 
 ;; Miscellanea
 
 (defmacro let-safe [bindings & forms]
-  `(maybe? (deduce-with maybe ~bindings ~@forms)))
+  `(maybe? (deduce-using maybe ~bindings ~@forms)))
