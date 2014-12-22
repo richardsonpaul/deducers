@@ -26,6 +26,8 @@
 (defprotocol Accumulator
   (accum [this x]))
 
+(def ^:dynamic *pure* identity)
+
 (defn >>=
   "Iteratively deduce the value mv throught the function(s) mfs,
   wrapping with the given deducer constructor d, if given.
@@ -36,10 +38,10 @@
    (bind mfs mv d)))
 
 (defn- deduce-body [deducer body]
-  (let [body-expr `(do ~@body)]
-    (if deducer
-      `(~deducer ~body-expr)
-      body-expr)))
+  (list
+   (if deducer deducer `*pure*)
+   `(do ~@body)))
+
 
 (defn- process-deduce [deducer bindings body]
   (letfn [(process [deducer [[v b] & bindings] body]
@@ -74,7 +76,9 @@
   Maybe
   (maybe? [_] just)
   ApplySpecial
-  (apply-to [_ f] (-> (f just) Just.))
+  (apply-to [_ f]
+    (binding [*pure* #(Just. %)]
+      (-> (f just) Just.)))
   Deducer
   (handle-nested [_] just))
 
@@ -125,10 +129,15 @@
            ([mf mv]
             (-> mv (apply-to mf) handle-nested)))})
 
+;; Vector and Queue, but not List, Conses, lazy-seqs, or other front-appending seqs
 (extend-type clojure.lang.Seqable
   ApplySpecial
   (apply-to [this f]
-    (into (empty this) (map f) this))
+    (binding [*pure* #(conj (empty this) %)]
+      (into (empty this) (map f) this)))
+  Deducer
+  (handle-nested [this]
+    (into (empty this) (apply concat this)))
   Binding
   (bind
     ([[mf & mfs] v d]
@@ -141,7 +150,8 @@
 (extend-type clojure.lang.ISeq
   ApplySpecial
   (apply-to [this f]
-    (apply list (map f this)))
+    (binding [*pure* list]
+      (apply list (map f this))))
   Deducer
   (handle-nested [nested]
     (apply concat nested)))

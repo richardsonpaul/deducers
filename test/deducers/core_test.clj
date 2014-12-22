@@ -75,4 +75,6 @@
 
 (test/deftest test-implicit-context
   (test/is (= [[3 0 0] [3 1 0] [3 1 1] [3 2 0] [3 2 1] [3 2 2]]
-              (deduce [x 3 y (range x) z (range (inc y))] (list [x y z])))))
+              (deduce [x 3 y (range x) z (range (inc y))] [x y z]))))
+
+(test/deftest test-adds-return)
