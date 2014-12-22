@@ -35,19 +35,29 @@
   ([mv d mfs]
    (bind mfs mv d)))
 
-(defn- process [deducer [[v b] & more] body]
-  `(>>= ~b
-        (fn [~v]
-          ~(if more
-             (process deducer more body)
-             (cons `do body)))
-        deducer))
+(defn- deduce-body [deducer body]
+  (let [body-expr `(do ~@body)]
+    (if deducer
+      `(~deducer ~body-expr)
+      body-expr)))
+
+(defn- process-deduce [deducer bindings body]
+  (letfn [(process [deducer [[v b] & bindings] body]
+            `(>>= ~b
+                  ~deducer
+                  ~(fn-body deducer v bindings body)))
+          (fn-body [deducer v bindings body]
+            `(fn [~v]
+               ~(if bindings
+                  (process deducer bindings body)
+                  (deduce-body deducer body))))]
+    (process deducer bindings body)))
 
 (defmacro deduce [bindings & exprs]
   `(deduce-with nil ~bindings ~@exprs))
 
 (defmacro deduce-with [deducer bindings & exprs]
-  (process deducer (partition 2 bindings) exprs))
+  (process-deduce deducer (partition 2 bindings) exprs))
 
 ;;;; Maybe: safe failure
 
@@ -91,9 +101,7 @@
     (update this :value assoc (a-to value f)))
   Deducer
   (handle-nested [this]
-    (update this :value assoc h-nest))
-  DeducingFn
-  (deduce-with [this f]))
+    (update this :value assoc h-nest)))
 
 ;; Extensions on clojure.core
 
@@ -110,15 +118,10 @@
   {:maybe? identity}
   ApplySpecial
   {:apply-to (fn [o f] (Just. (f o)))}
-  Deducer
-  {:handle-nested identity}
   Binding
   {:bind (fn
            ([mf mv d]
-            (let [result (bind mf mv)]
-              (if d
-                (d result)
-                result)))
+            (bind mf (if d (d mv) mv)))
            ([mf mv]
             (-> mv (apply-to mf) handle-nested)))})
 
@@ -127,10 +130,13 @@
   (apply-to [this f]
     (into (empty this) (map f) this))
   Binding
-  (bind [[mf & mfs] v d]
-    (recur mfs (bind mf v d)))
-  (bind [mfs v]
-    (bind mfs v nil)))
+  (bind
+    ([[mf & mfs] v d]
+     (if mf
+       (recur mfs (bind mf v d) d)
+       v))
+    ([mfs v]
+     (bind mfs v nil))))
 
 (extend-type clojure.lang.ISeq
   ApplySpecial
@@ -151,4 +157,4 @@
 ;; Miscellanea
 
 (defmacro let-safe [bindings & forms]
-  `(maybe? (deduce-using maybe ~bindings ~@forms)))
+  `(maybe? (deduce-with maybe ~bindings ~@forms)))
