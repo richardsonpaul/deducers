@@ -33,25 +33,20 @@
   ([mv mfs]
    (bind mfs mv))
   ([mv d mfs]
-   (bind mfs mv d)))
-
-(defn- deduce-body [deducer body]
-  (let [body-expr `(do ~@body)]
-    (if deducer
-      `(~deducer ~body-expr)
-      body-expr)))
+   (if-not d
+     (bind mfs mv)
+     (bind mfs mv d))))
 
 (defn- process-deduce [deducer bindings body]
-  (letfn [(process [deducer [[v b] & bindings] body]
-            `(>>= ~b
-                  ~deducer
-                  ~(fn-body deducer v bindings body)))
-          (fn-body [deducer v bindings body]
+  (letfn [(process [[[v b] & bindings]]
+            `(>>= (~deducer ~b)
+                  ~(fn-body v bindings)))
+          (fn-body [v bindings]
             `(fn [~v]
                ~(if bindings
-                  (process deducer bindings body)
-                  (deduce-body deducer body))))]
-    (process deducer bindings body)))
+                  (process bindings)
+                  `(~deducer (do ~@body)))))]
+    (process bindings)))
 
 (defmacro deduce [bindings & exprs]
   `(deduce-with nil ~bindings ~@exprs))
@@ -116,12 +111,12 @@
 (extend Object
   Maybe
   {:maybe? identity}
-  ApplySpecial
-  {:apply-to (fn [o f] (Just. (f o)))}
+;  ApplySpecial
+;  {:apply-to (fn [o f] (Just. (f o)))}
   Binding
   {:bind (fn
            ([mf mv d]
-            (bind mf (if d (d mv) mv)))
+            (cond-> (bind mf mv) d d))
            ([mf mv]
             (-> mv (apply-to mf) handle-nested)))})
 
