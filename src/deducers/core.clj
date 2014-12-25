@@ -17,16 +17,30 @@
 (defprotocol Deducer
   (handle-nested [nested]))
 
+(defprotocol Accumulator
+  (accum [this x]))
+
 (defprotocol ^:private Binding
              "Dispatch >>= polymorphically"
              (bind
                [seq-or-obj v]
                [seq-or-obj v d]))
 
-(defprotocol Accumulator
-  (accum [this x]))
-
-(def ^:dynamic *pure* identity)
+(extend-protocol Binding
+  Object
+  (bind
+    ([mf mv d]
+     (-> (cond->> mf d (comp d)) (bind mv)))
+    ([mf mv]
+     (-> mv (apply-to mf) handle-nested)))
+  clojure.lang.Seqable
+  (bind
+    ([[mf & mfs] v d]
+     (if mf
+       (recur mfs (bind mf v d) d)
+       v))
+    ([mfs v]
+     (bind mfs v nil))))
 
 (defn >>=
   "Iteratively deduce the value mv throught the function(s) mfs,
@@ -70,8 +84,7 @@
   (maybe? [_] just)
   ApplySpecial
   (apply-to [_ f]
-    (binding [*pure* #(Just. %)]
-      (-> (f just) Just.)))
+    (-> (f just) Just.))
   Deducer
   (handle-nested [_] just))
 
@@ -116,37 +129,21 @@
   Maybe
   {:maybe? identity}
   ApplySpecial
-  {:apply-to (fn [o f] (Just. (f o)))}
-  Binding
-  {:bind (fn
-           ([mf mv d]
-            (-> (cond->> mf d (comp d)) (bind mv)))
-           ([mf mv]
-            (-> mv (apply-to mf) handle-nested)))})
+  {:apply-to (fn [o f] (Just. (f o)))})
 
 ;; Vector and Queue, but not List, Conses, lazy-seqs, or other front-appending seqs
 (extend-type clojure.lang.Seqable
   ApplySpecial
   (apply-to [this f]
-    (binding [*pure* #(conj (empty this) %)]
-      (into (empty this) (map f) this)))
+    (into (empty this) (map f) this))
   Deducer
   (handle-nested [this]
-    (into (empty this) (apply concat this)))
-  Binding
-  (bind
-    ([[mf & mfs] v d]
-     (if mf
-       (recur mfs (bind mf v d) d)
-       v))
-    ([mfs v]
-     (bind mfs v nil))))
+    (into (empty this) (apply concat this))))
 
 (extend-type clojure.lang.ISeq
   ApplySpecial
   (apply-to [this f]
-    (binding [*pure* list]
-      (apply list (map f this))))
+    (apply list (map f this)))
   Deducer
   (handle-nested [nested]
     (apply concat nested)))
