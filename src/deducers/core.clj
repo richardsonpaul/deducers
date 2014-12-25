@@ -35,31 +35,24 @@
   ([mv mfs]
    (bind mfs mv))
   ([mv d mfs]
-   (bind mfs mv d)))
+   (bind mfs (d mv) d)))
 
-(defn- deduce-body [deducer body]
-  (list
-   (if deducer deducer `*pure*)
-   `(do ~@body)))
+(defn- process [[[v b] & more] body]
+  `(>>= ~b
+        (fn [~v]
+          ~(if more
+             (process more body)
+             body))))
 
+(defmacro deduce [defs & body]
+  (process (partition 2 defs) (cons `do body)))
 
-(defn- process-deduce [deducer bindings body]
-  (letfn [(process [deducer [[v b] & bindings] body]
-            `(>>= ~b
-                  ~deducer
-                  ~(fn-body deducer v bindings body)))
-          (fn-body [deducer v bindings body]
-            `(fn [~v]
-               ~(if bindings
-                  (process deducer bindings body)
-                  (deduce-body deducer body))))]
-    (process deducer bindings body)))
-
-(defmacro deduce [bindings & exprs]
-  `(deduce-with nil ~bindings ~@exprs))
-
-(defmacro deduce-with [deducer bindings & exprs]
-  (process-deduce deducer (partition 2 bindings) exprs))
+(defmacro deduce-with [wrap-fn defs & body]
+  (list `deduce
+         (interleave
+          (take-nth 2 defs)
+          (->> defs (drop 1) (take-nth 2) (map #(list wrap-fn %))))
+         (list wrap-fn (list* `do body))))
 
 ;;;; Maybe: safe failure
 
@@ -99,13 +92,15 @@
 
 ;; Ad-hoc
 
-(defrecord AdHocDeducer [a-to h-nest a-de value]
+(defrecord AdHocDeducer [apply-to handle-nested value]
   ApplySpecial
   (apply-to [this f]
-    (update this :value assoc (a-to value f)))
+    (assoc this :value (apply-to value f)))
   Deducer
   (handle-nested [this]
-    (update this :value assoc h-nest)))
+    (-> this
+        (update-in [:value 1] :value)
+        (update :value handle-nested))))
 
 ;; Extensions on clojure.core
 
@@ -125,7 +120,7 @@
   Binding
   {:bind (fn
            ([mf mv d]
-            (bind mf (if d (d mv) mv)))
+            (-> (cond->> mf d (comp d)) (bind mv)))
            ([mf mv]
             (-> mv (apply-to mf) handle-nested)))})
 
