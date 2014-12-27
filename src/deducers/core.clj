@@ -4,6 +4,7 @@
 ;; Protocols
 
 (defprotocol ApplySpecial
+  "Specifies how to apply a deducer to a 'regular' fn."
   (apply-to [this f]))
 
 (extend-protocol ApplySpecial
@@ -14,10 +15,23 @@
   (apply-to [this f]
     (comp f this)))
 
-(defprotocol Deducer
+(defprotocol FlexDeducer
+  "A FlexDeducer needs to also provide ApplySpecial/apply-to
+   as part of its implementation. Applying a Deducer to a deducible
+  function will end up returning a deducer with some kind of nesting.
+  This function un-nests and folds in the return value with the nested one."
   (handle-nested [nested]))
 
+(defprotocol SimpleDeducer
+  "A deducer contained in one function that both applies the Deducer
+   to the fn arg, and fixes up the return value, all in one go."
+  (deduce [v f]))
+
 (defprotocol Accumulator
+  "An accumulator tells how to fold two values together. This can be viewed
+   like a fn passable to reduce, which takes two values and accumulates one
+  into the other. \"accum\" takes two values of the same type and returns
+  the same type, with the two args combined/folded together as the result."
   (accum [this x]))
 
 (defprotocol ^:private Binding
@@ -30,7 +44,8 @@
   Object
   (bind
     ([mf mv d]
-     (-> (cond->> mf d (comp d)) (bind mv)))
+     (-> (cond->> mf d (comp d))
+         (bind (cond-> mv d d))))
     ([mf mv]
      (-> mv (apply-to mf) handle-nested)))
   clojure.lang.Seqable
@@ -49,7 +64,7 @@
   ([mv mfs]
    (bind mfs mv))
   ([mv d mfs]
-   (bind mfs (d mv) d)))
+   (bind mfs mv d)))
 
 (defn- process [[[v b] & more] body]
   `(>>= ~b
@@ -58,11 +73,11 @@
              (process more body)
              body))))
 
-(defmacro deduce [defs & body]
+(defmacro let-deduce [defs & body]
   (process (partition 2 defs) (cons `do body)))
 
 (defmacro deduce-with [wrap-fn defs & body]
-  (list `deduce
+  (list `let-deduce
          (interleave
           (take-nth 2 defs)
           (->> defs (drop 1) (take-nth 2) (map #(list wrap-fn %))))
@@ -85,7 +100,7 @@
   ApplySpecial
   (apply-to [_ f]
     (-> (f just) Just.))
-  Deducer
+  FlexDeducer
   (handle-nested [_] just))
 
 (defmethod print-method Just [m w]
@@ -99,22 +114,31 @@
 (defrecord Acc [acc value]
   ApplySpecial
   (apply-to [_ func] (Acc. acc (func value)))
-  Deducer
+  FlexDeducer
   (handle-nested [_]
     (assoc value :acc (accum acc (:acc value)))))
 
 ;; Ad-hoc
 
-(defrecord AdHocDeducer [apply-to handle-nested value]
+(defrecord AdHoc [apply-to handle-nested value]
   ApplySpecial
   (apply-to [this f]
     (assoc this :value (apply-to value f)))
-  Deducer
+  FlexDeducer
   (handle-nested [this]
     (-> this
         (update-in [:value 1] :value)
-        (update :value handle-nested))))
+        (update :value handle-nested)
+        :value)))
 
+(defn deducer
+  "Constructs an ad-hoc deducer specified by the args:
+   A single fn as arg acts as the deduce function in a SimpleDeducer.
+   Multiple args specify a FlexDeducer, and
+    should be given as keyword -> fn where the supported
+    keywords are :apply-special and :handle-nested"
+  [& {:keys [apply-special handle-nested] :as args}]
+  #(map->AdHoc (merge args) {:value %}))
 ;; Extensions on clojure.core
 
 (extend-type nil
@@ -122,7 +146,7 @@
   (maybe? [_])
   ApplySpecial
   (apply-to [this f])
-  Deducer
+  FlexDeducer
   (handle-nested [_]))
 
 (extend Object
@@ -136,7 +160,7 @@
   ApplySpecial
   (apply-to [this f]
     (into (empty this) (map f) this))
-  Deducer
+  FlexDeducer
   (handle-nested [this]
     (into (empty this) (apply concat this))))
 
@@ -144,14 +168,14 @@
   ApplySpecial
   (apply-to [this f]
     (apply list (map f this)))
-  Deducer
+  FlexDeducer
   (handle-nested [nested]
     (apply concat nested)))
 
 (extend-type String
   ApplySpecial
   (apply-to [s f] (pr-str (f (clojure.edn/read-string s))))
-  Deducer
+  FlexDeducer
   (handle-nested [s] (clojure.edn/read-string s))
   Accumulator
   (accum [this x] (str this x)))

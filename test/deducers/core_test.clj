@@ -75,7 +75,7 @@
 
 (test/deftest test-implicit-context
   (test/is (= [[3 0 0] [3 1 0] [3 1 1] [3 2 0] [3 2 1] [3 2 2]]
-              (deduce [x 3 y (range x) z (range (inc y))] (list [x y z])))))
+              (let-deduce [x 3 y (range x) z (range (inc y))] (list [x y z])))))
 
 (test/deftest test-adhoc
   (let [events [{:damage 3}
@@ -98,7 +98,7 @@
         handle-nested (fn [[og [{:keys [merge-fn health]} events]]]
                         [(merge-with merge-fn og {:health health}) events])
         adhoc-spec {:apply-to apply-to :handle-nested handle-nested}
-        adhoc-gen #(map->AdHocDeducer (merge adhoc-spec {:value %}))]
+        adhoc-gen #(map->AdHoc (merge adhoc-spec {:value %}))]
     (test/is (= [{:health 18} [{:foo :bar}]]
                 (-> [guy events]
-                    (>>= adhoc-gen [damage heal super-heal]) :value)))))
+                    (>>= adhoc-gen [damage heal super-heal]))))))
