@@ -97,8 +97,16 @@
                    [c (f e)])
         handle-nested (fn [[og [{:keys [merge-fn health]} events]]]
                         [(merge-with merge-fn og {:health health}) events])
-        adhoc-spec {:apply-to apply-to :handle-nested handle-nested}
-        adhoc-gen #(map->AdHoc (merge adhoc-spec {:value %}))]
-    (test/is (= [{:health 18} [{:foo :bar}]]
+        adhoc-gen (deducer :apply-to apply-to :handle-nested handle-nested)
+        deduce (fn [[c e] f]
+                 (let [res (f e)
+                       {:keys [merge-fn health]} m]
+                   [(merge-with merge-fn c {:health health}) new-e]))
+        simple (deducer :deduce deduce)
+        expected [{:health 18} [{:foo :bar}]]]
+    (test/is (= expected
                 (-> [guy events]
-                    (>>= adhoc-gen [damage heal super-heal]))))))
+                    (>>= adhoc-gen [damage heal super-heal]))))
+    (test/is (= expected
+                (-> [guy events]
+                    (>>= simple [damage heal super-heal]))))))

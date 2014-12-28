@@ -40,14 +40,22 @@
                [seq-or-obj v]
                [seq-or-obj v d]))
 
-(extend-protocol Binding
-  Object
+(defn- deduce* [mv mf]
+  (-> mv (apply-to mf) handle-nested))
+
+(extend-type Object
+  SimpleDeducer
+  (deduce [mv mf]
+    (deduce* mv mf))
+  Binding
   (bind
     ([mf mv d]
      (-> (cond->> mf d (comp d))
          (bind (cond-> mv d d))))
     ([mf mv]
-     (-> mv (apply-to mf) handle-nested)))
+     (deduce mv mf))))
+
+(extend-protocol Binding
   clojure.lang.Seqable
   (bind
     ([[mf & mfs] v d]
@@ -120,7 +128,7 @@
 
 ;; Ad-hoc
 
-(defrecord AdHoc [apply-to handle-nested value]
+(defrecord AdHoc [apply-to handle-nested deduce value]
   ApplySpecial
   (apply-to [this f]
     (assoc this :value (apply-to value f)))
@@ -129,7 +137,12 @@
     (-> this
         (update-in [:value 1] :value)
         (update :value handle-nested)
-        :value)))
+        :value))
+  SimpleDeducer
+  (deduce [this f]
+    (if deduce
+      (deduce value f)
+      (deduce* this f))))
 
 (defn deducer
   "Constructs an ad-hoc deducer specified by the args:
@@ -137,8 +150,8 @@
    Multiple args specify a FlexDeducer, and
     should be given as keyword -> fn where the supported
     keywords are :apply-special and :handle-nested"
-  [& {:keys [apply-special handle-nested] :as args}]
-  #(map->AdHoc (merge args) {:value %}))
+  [& {:keys [apply-to handle-nested] :as args}]
+  #(map->AdHoc (merge args {:value %})))
 ;; Extensions on clojure.core
 
 (extend-type nil
