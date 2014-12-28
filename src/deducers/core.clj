@@ -40,39 +40,25 @@
                [seq-or-obj v]
                [seq-or-obj v d]))
 
+(extend-protocol Binding
+  Object
+  (bind [mf mv]
+    (deduce mv mf))
+  clojure.lang.Seqable
+  (bind [[mf & mfs] v]
+    (if mf
+      (recur mfs (bind mf v))
+      v)))
+
 (defn- deduce* [mv mf]
   (-> mv (apply-to mf) handle-nested))
-
-(extend-type Object
-  SimpleDeducer
-  (deduce [mv mf]
-    (deduce* mv mf))
-  Binding
-  (bind
-    ([mf mv d]
-     (-> (cond->> mf d (comp d))
-         (bind (cond-> mv d d))))
-    ([mf mv]
-     (deduce mv mf))))
-
-(extend-protocol Binding
-  clojure.lang.Seqable
-  (bind
-    ([[mf & mfs] v d]
-     (if mf
-       (recur mfs (bind mf v d) d)
-       v))
-    ([mfs v]
-     (bind mfs v nil))))
 
 (defn >>=
   "Iteratively deduce the value mv throught the function(s) mfs,
   wrapping with the given deducer constructor d, if given.
   Can pass a Seqable of fns or a single fn for mfs, dispatches polymorphically."
-  ([mv mfs]
-   (bind mfs mv))
-  ([mv d mfs]
-   (bind mfs mv d)))
+  [mv mfs]
+  (bind mfs mv))
 
 (defn- process [[[v b] & more] body]
   `(>>= ~b
@@ -117,41 +103,6 @@
 (defn maybe [x]
   (if x (Just. x)))
 
-;; Writer
-
-(defrecord Acc [acc value]
-  ApplySpecial
-  (apply-to [_ func] (Acc. acc (func value)))
-  FlexDeducer
-  (handle-nested [_]
-    (assoc value :acc (accum acc (:acc value)))))
-
-;; Ad-hoc
-
-(defrecord AdHoc [apply-to handle-nested deduce value]
-  ApplySpecial
-  (apply-to [this f]
-    (assoc this :value (apply-to value f)))
-  FlexDeducer
-  (handle-nested [this]
-    (-> this
-        (update-in [:value 1] :value)
-        (update :value handle-nested)
-        :value))
-  SimpleDeducer
-  (deduce [this f]
-    (if deduce
-      (deduce value f)
-      (deduce* this f))))
-
-(defn deducer
-  "Constructs an ad-hoc deducer specified by the args:
-   A single fn as arg acts as the deduce function in a SimpleDeducer.
-   Multiple args specify a FlexDeducer, and
-    should be given as keyword -> fn where the supported
-    keywords are :apply-special and :handle-nested"
-  [& {:keys [apply-to handle-nested] :as args}]
-  #(map->AdHoc (merge args {:value %})))
 ;; Extensions on clojure.core
 
 (extend-type nil
@@ -160,11 +111,15 @@
   ApplySpecial
   (apply-to [this f])
   FlexDeducer
-  (handle-nested [_]))
+  (handle-nested [_])
+  SimpleDeducer
+  (deduce [_ _]))
 
 (extend Object
   Maybe
   {:maybe? identity}
+  SimpleDeducer
+  {:deduce deduce*}
   ApplySpecial
   {:apply-to (fn [o f] (Just. (f o)))})
 
@@ -192,6 +147,46 @@
   (handle-nested [s] (clojure.edn/read-string s))
   Accumulator
   (accum [this x] (str this x)))
+
+;; Ad-hoc
+
+(defrecord AdHoc [apply-to handle-nested deduce value]
+  ApplySpecial
+  (apply-to [this f]
+    (update this :value apply-to f))
+  FlexDeducer
+  (handle-nested [this]
+    (update this :value handle-nested))
+  SimpleDeducer
+  (deduce [this f]
+    (if deduce
+      (update this :value deduce f)
+      (deduce* this f))))
+
+; TODO update docs
+(defn deducer
+  "Constructs an ad-hoc deducer specified by the args:
+   A single fn as arg acts as the deduce function in a SimpleDeducer.
+   Multiple args specify a FlexDeducer, and
+    should be given as keyword -> fn where the supported
+    keywords are :apply-special and :handle-nested"
+  [deducer-fns]
+  #(map->AdHoc (assoc deducer-fns :value %)))
+
+(defn deducer->>=
+; TODO docs
+  [value deducer-fns & fs]
+  (let [d (deducer deducer-fns)]
+    (:value (>>= (d value) fs))))
+
+;; Writer
+
+(defrecord Acc [acc value]
+  ApplySpecial
+  (apply-to [_ func] (Acc. acc (func value)))
+  FlexDeducer
+  (handle-nested [_]
+    (assoc value :acc (accum acc (:acc value)))))
 
 ;; Miscellanea
 

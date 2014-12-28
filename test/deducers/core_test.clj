@@ -77,6 +77,10 @@
   (test/is (= [[3 0 0] [3 1 0] [3 1 1] [3 2 0] [3 2 1] [3 2 2]]
               (let-deduce [x 3 y (range x) z (range (inc y))] (list [x y z])))))
 
+(test/deftest test-vector-context
+  (test/is (= [[3 0 0] [3 1 0] [3 1 1] [3 2 0] [3 2 1] [3 2 2]]
+              (let-deduce [x [3] y (range x) z (range (inc y))] (list [x y z])))))
+
 (test/deftest test-adhoc
   (let [events [{:damage 3}
                 {:heal 4}
@@ -97,16 +101,16 @@
                    [c (f e)])
         handle-nested (fn [[og [{:keys [merge-fn health]} events]]]
                         [(merge-with merge-fn og {:health health}) events])
-        adhoc-gen (deducer :apply-to apply-to :handle-nested handle-nested)
+        adhoc-gen {:apply-to apply-to :handle-nested handle-nested}
         deduce (fn [[c e] f]
-                 (let [res (f e)
+                 (let [[m new-e] (f e)
                        {:keys [merge-fn health]} m]
                    [(merge-with merge-fn c {:health health}) new-e]))
-        simple (deducer :deduce deduce)
+        simple {:deduce deduce}
         expected [{:health 18} [{:foo :bar}]]]
     (test/is (= expected
                 (-> [guy events]
-                    (>>= adhoc-gen [damage heal super-heal]))))
+                    (deducer->>= adhoc-gen damage heal super-heal))))
     (test/is (= expected
                 (-> [guy events]
-                    (>>= simple [damage heal super-heal]))))))
+                    (deducer->>= simple damage heal super-heal))))))
