@@ -54,11 +54,23 @@
   (-> mv (apply-to mf) handle-nested))
 
 (defn >>=
-  "Iteratively deduce the value mv throught the function(s) mfs,
-  wrapping with the given deducer constructor d, if given.
-  Can pass a Seqable of fns or a single fn for mfs, dispatches polymorphically."
-  [mv mfs]
+  "Iteratively deduce the value mv throught the function(s) mfs."
+  [mv & mfs]
   (bind mfs mv))
+
+(defn deducer->>=
+  "Parameter 'value' is a \"special\" (passed to the fns \"fs\"), used
+  as an init value. It is piped through 'fs' using >>=, and is wrapped
+  by the deducer specified by deducer. This arg should be a fn that takes one arg,
+  as returned from '->deducer.'
+
+  If the deducer has a :value key, that will be returned instead of the deducer.
+
+  This function reads like, \"Use 'value' in a 'deducer' and pass it through 'fs'\""
+  [value deducer & fs]
+  (let [deduced (>>= (deducer value) fs)
+        value (:value deduced)]
+    (if value value deduced)))
 
 (defn- process [f args [[v b] & more] body]
   `(~f ~b ~@args
@@ -67,23 +79,23 @@
            (process f args more body)
            body))))
 
-(defn deduce-form [defs body f & args]
+(defn- deduce-form [defs body f & args]
   (process f args (partition 2 defs) (cons `do body)))
 
 (defmacro let-deduce
   "A macro that allows deduced expressions to see the values of
   previously deduced expressions, similar to a let block.
   Each rhv of the binding vector 'defs' should return a deducer;
-  e.g. (->Just ...), (MyDeducer. ...) - or ((deducer ...) ...), for an ad-hoc.
+  e.g. (->Just ...), (MyDeducer. ...) - or ((->deducer ...) ...), for an ad-hoc.
   The body should also have a deducer in the final expression, so that you
   can chain the let-duduce with other deducing expressions"
   [defs & body]
   (deduce-form defs body `>>=))
 
 (defmacro deduce-with
-  "Similar to let-deduce in structure, with an added deducer arg. This arg has the
-  same structure as the arg to 'deducer', and has the same effect: it defines an
-  adhoc deducer, which will be used in all values in the 'defs' binding vector, and
+  "Similar to let-deduce in structure, with an added deducer arg. This arg should
+  be a fn that takes one arg and returns a deducer, like ->deducer creates.
+  This \"constructor\" will wrap all rh expressions in the 'defs' binding vector, and
   in the body expression of the deduce-with."
   [deducer defs & body]
   (deduce-form defs body `deducer->>= deducer))
@@ -174,8 +186,8 @@
       (update this :value deduce f)
       (deduce* this f))))
 
-(defn deducer
-  "Constructs an ad-hoc deducer specified by the args:
+(defn ->deducer
+  "Returns a fn that builds an ad-hoc deducer specified by the args:
    Either a fn or a map should be given (tested as counted?)
    A fn as arg acts as the deduce function in a SimpleDeducer.
   Otherwise, with a map arg, keys should be either :deduce or
@@ -185,17 +197,6 @@
                     deducer-fns
                     {:deduce deducer-fns})]
     #(map->AdHoc (assoc adhoc-fns :value %))))
-
-(defn deducer->>=
-  "Parameter 'value' is a \"special\" (passed to the fns \"fs\"), used
-  as an init value. It is piped through 'fs' using >>=, and is wrapped
-  by the deducer specified by deducer-fns. This arg should be structured
-  as a fn or a map, as specified in the docstring for 'deducer.'
-
-  This function reads like, \"Use 'value' in a 'deducer' and pass it through 'fs'\""
-  [value deducer-fns & fs]
-  (let [d (deducer deducer-fns)]
-    (:value (>>= (d value) fs))))
 
 ;; Writer
 
@@ -208,5 +209,13 @@
 
 ;; Miscellanea
 
-(defmacro let-safe [bindings & forms]
-  `(maybe? (deduce-with maybe ~bindings ~@forms)))
+(defmacro let-safe
+  "Like let, except wraps all expressions that are in the binding form in a
+  call to 'maybe', making the expressions - and the let as a whole - nil-safe"
+  [bindings & forms]
+  (let [maybe (fn [e] `(maybe ~e))
+        vars (take-nth 2 bindings)
+        exprs (->> (rest bindings)
+                   (take-nth 2)
+                   (map maybe))]
+    `(let-deduce ~(interleave vars exprs) ~@forms)))

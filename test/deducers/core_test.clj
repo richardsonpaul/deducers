@@ -60,13 +60,13 @@
     (apply-special? (into clojure.lang.PersistentQueue/EMPTY m) inc #(* 2 %))))
 
 (test/deftest test-deduce-with-acc
-  (let [log-str "Did something"
-        log-something (partial ->Acc log-str)]
-    (test/is (= (->Acc (clojure.string/join (repeat 3 log-str)) 6)
-              (deduce-with log-something
-                           [x 3
-                            y (inc x)]
-                           (+ y 2))))))
+  (let [start "Started with 3, "
+        middle "incremented, "
+        end "then added 2!"]
+    (test/is (= (->Acc (str start middle end) 6)
+                (let-deduce [x (->Acc start 3)
+                             y (->Acc middle (inc x))]
+                         (->Acc end (+ y 2)))))))
 
 (test/deftest test-safe-let
   (let [let-test #(let-safe [x % y (+ x 4)] (* x y))]
@@ -109,16 +109,16 @@
         expected [{:health 18} [{:foo :bar}]]]
     (test/is (= expected
                 (-> [guy events]
-                    (deducer->>= adhoc-gen damage heal super-heal))))
+                    (deducer->>= (->deducer adhoc-gen) damage heal super-heal))))
     (test/is (= expected
                 (-> [guy events]
-                    (deducer->>= deduce damage heal super-heal))))))
+                    (deducer->>= (->deducer deduce) damage heal super-heal))))))
 
 (test/deftest test-deduce-with
-  (let [deducing (fn [[x] f] (apply vector x (f x)))]
+  (letfn [(f [[x] f] (apply vector x (f x)))]
     (test/is
      (= [3 4 12]
-        (deduce-with deducing
+        (deduce-with (->deducer f)
                      [x [3]
                       y (-> x inc vector)]
                      [(* x y)])))))
