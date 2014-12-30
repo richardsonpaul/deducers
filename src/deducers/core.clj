@@ -60,22 +60,33 @@
   [mv mfs]
   (bind mfs mv))
 
-(defn- process [[[v b] & more] body]
-  `(>>= ~b
-        (fn [~v]
-          ~(if more
-             (process more body)
-             body))))
+(defn- process [f args [[v b] & more] body]
+  `(~f ~b ~@args
+      (fn [~v]
+        ~(if more
+           (process f args more body)
+           body))))
 
-(defmacro let-deduce [defs & body]
-  (process (partition 2 defs) (cons `do body)))
+(defn deduce-form [defs body f & args]
+  (process f args (partition 2 defs) (cons `do body)))
 
-(defmacro deduce-with [wrap-fn defs & body]
-  (list `let-deduce
-         (interleave
-          (take-nth 2 defs)
-          (->> defs (drop 1) (take-nth 2) (map #(list wrap-fn %))))
-         (list wrap-fn (list* `do body))))
+(defmacro let-deduce
+  "A macro that allows deduced expressions to see the values of
+  previously deduced expressions, similar to a let block.
+  Each rhv of the binding vector 'defs' should return a deducer;
+  e.g. (->Just ...), (MyDeducer. ...) - or ((deducer ...) ...), for an ad-hoc.
+  The body should also have a deducer in the final expression, so that you
+  can chain the let-duduce with other deducing expressions"
+  [defs & body]
+  (deduce-form defs body `>>=))
+
+(defmacro deduce-with
+  "Similar to let-deduce in structure, with an added deducer arg. This arg has the
+  same structure as the arg to 'deducer', and has the same effect: it defines an
+  adhoc deducer, which will be used in all values in the 'defs' binding vector, and
+  in the body expression of the deduce-with."
+  [deducer defs & body]
+  (deduce-form defs body `deducer->>= deducer))
 
 ;;;; Maybe: safe failure
 
@@ -163,18 +174,25 @@
       (update this :value deduce f)
       (deduce* this f))))
 
-; TODO update docs
 (defn deducer
   "Constructs an ad-hoc deducer specified by the args:
-   A single fn as arg acts as the deduce function in a SimpleDeducer.
-   Multiple args specify a FlexDeducer, and
-    should be given as keyword -> fn where the supported
-    keywords are :apply-special and :handle-nested"
+   Either a fn or a map should be given (tested as counted?)
+   A fn as arg acts as the deduce function in a SimpleDeducer.
+  Otherwise, with a map arg, keys should be either :deduce or
+   :apply-special and :handle-nested"
   [deducer-fns]
-  #(map->AdHoc (assoc deducer-fns :value %)))
+  (let [adhoc-fns (if (counted? deducer-fns)
+                    deducer-fns
+                    {:deduce deducer-fns})]
+    #(map->AdHoc (assoc adhoc-fns :value %))))
 
 (defn deducer->>=
-; TODO docs
+  "Parameter 'value' is a \"special\" (passed to the fns \"fs\"), used
+  as an init value. It is piped through 'fs' using >>=, and is wrapped
+  by the deducer specified by deducer-fns. This arg should be structured
+  as a fn or a map, as specified in the docstring for 'deducer.'
+
+  This function reads like, \"Use 'value' in a 'deducer' and pass it through 'fs'\""
   [value deducer-fns & fs]
   (let [d (deducer deducer-fns)]
     (:value (>>= (d value) fs))))

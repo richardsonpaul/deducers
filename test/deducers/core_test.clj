@@ -59,7 +59,7 @@
   (prop/for-all [m (gen/list gen/int)]
     (apply-special? (into clojure.lang.PersistentQueue/EMPTY m) inc #(* 2 %))))
 
-(test/deftest test-deduce-with
+(test/deftest test-deduce-with-acc
   (let [log-str "Did something"
         log-something (partial ->Acc log-str)]
     (test/is (= (->Acc (clojure.string/join (repeat 3 log-str)) 6)
@@ -106,11 +106,19 @@
                  (let [[m new-e] (f e)
                        {:keys [merge-fn health]} m]
                    [(merge-with merge-fn c {:health health}) new-e]))
-        simple {:deduce deduce}
         expected [{:health 18} [{:foo :bar}]]]
     (test/is (= expected
                 (-> [guy events]
                     (deducer->>= adhoc-gen damage heal super-heal))))
     (test/is (= expected
                 (-> [guy events]
-                    (deducer->>= simple damage heal super-heal))))))
+                    (deducer->>= deduce damage heal super-heal))))))
+
+(test/deftest test-deduce-with
+  (let [deducing (fn [[x] f] (apply vector x (f x)))]
+    (test/is
+     (= [3 4 12]
+        (deduce-with deducing
+                     [x [3]
+                      y (-> x inc vector)]
+                     [(* x y)])))))
