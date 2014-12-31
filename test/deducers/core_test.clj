@@ -115,10 +115,33 @@
                     (deducer->>= (->deducer deduce) damage heal super-heal))))))
 
 (test/deftest test-deduce-with
-  (letfn [(f [[x] f] (apply vector x (f x)))]
+  (letfn [(func [[x] f] (apply vector x (f x)))]
     (test/is
      (= [3 4 12]
-        (deduce-with (->deducer f)
+        (deduce-with (->deducer func)
                      [x [3]
                       y (-> x inc vector)]
                      [(* x y)])))))
+
+(test/deftest test-nested "An Acc with a Just inside"
+  (test/is (= (->Acc "Init; Did a thing - Finis" (->Just 7))
+              (let-deduce [x (->> (->Just 3) (->Acc "Init;"))
+                           y ((compose (partial ->Acc " Did a thing") #(->Just (inc %))) x)]
+                          ((compose (partial ->Acc " - Finis") #(->Just (+ 3 %))) y)))))
+
+(def vec-deducer (->deducer (fn [[x] f] (apply vector x (f x)))))
+
+(test/deftest test-nested-adhoc "An Acc with a nested adhoc nested inside (!)"
+  (let [d (->deducer (fn [[x] f] [(f x)]))
+        call-nested (fn [log-log log-str f value]
+                        (let [deducer-from (compose
+                                            (partial ->Acc log-log)
+                                            (partial ->Acc log-str)
+                                            f)]
+                          (deducer-from value)))]
+    (test/is (= (->Acc "Started logging; Logged an op; Finished logging"
+                   (->Acc "Init; Inc-ing; Adding three"
+                      (d [7])))
+                (let-deduce [x (->Acc "Started logging; " (->Acc "Init; " (d [3])))
+                             y (call-nested "Logged an op; " "Inc-ing; " inc x)]
+                             (call-nested "Finished logging" "Adding three" #(+ % 3) y))))))

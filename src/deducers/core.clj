@@ -8,9 +8,6 @@
   (apply-to [this f]))
 
 (extend-protocol ApplySpecial
-  clojure.lang.IPersistentMap
-  (apply-to [this f]
-    (into {} (map (fn [[k v]] [k (f v)])) this))
   clojure.lang.Fn
   (apply-to [this f]
     (comp f this)))
@@ -27,12 +24,16 @@
    to the fn arg, and fixes up the return value, all in one go."
   (deduce [v f]))
 
+(defprotocol ValueDeducer
+  "A deducer-value nested inside an unwrappable deducer, used in deducer->>="
+  (unwrap [this] "Remove the deducer, returning the contained value"))
+
 (defprotocol Accumulator
   "An accumulator tells how to fold two values together. This can be viewed
    like a fn passable to reduce, which takes two values and accumulates one
-  into the other. \"accum\" takes two values of the same type and returns
+  into the other. The fn \"accum\" takes two values of the same type and returns
   the same type, with the two args combined/folded together as the result."
-  (accum [this x]))
+  (accum [this x] "Accumulates this and x: see the Accumulator protocol"))
 
 (defprotocol ^:private Binding
              "Dispatch >>= polymorphically"
@@ -59,18 +60,20 @@
   (bind mfs mv))
 
 (defn deducer->>=
-  "Parameter 'value' is a \"special\" (passed to the fns \"fs\"), used
-  as an init value. It is piped through 'fs' using >>=, and is wrapped
-  by the deducer specified by deducer. This arg should be a fn that takes one arg,
-  as returned from '->deducer.'
+  "Like >>= for Adhoc (or any other deducer you want to wrap with). Instead of
+  wrapping the init value with your deducer constructor,
+  you can use this function instead of >>=, with your constructing fn passed in as
+  an arg, and the value will be sent to the constructor.
+  The constructor should take one arg, and construct a deducer with it, like the
+  one returned from '->deducer.'
 
-  If the deducer has a :value key, that will be returned instead of the deducer.
+  If the deducer implements ValueDeducer, the unwrapped value will be returned; this
+  is mostly useful for AdhocDeducer, which tries to be invisible.
 
   This function reads like, \"Use 'value' in a 'deducer' and pass it through 'fs'\""
   [value deducer & fs]
-  (let [deduced (>>= (deducer value) fs)
-        value (:value deduced)]
-    (if value value deduced)))
+  (let [deduced (>>= (deducer value) fs)]
+    (unwrap deduced)))
 
 (defn- process [f args [[v b] & more] body]
   `(~f ~b ~@args
@@ -144,7 +147,9 @@
   SimpleDeducer
   {:deduce deduce*}
   ApplySpecial
-  {:apply-to (fn [o f] (Just. (f o)))})
+  {:apply-to (fn [o f] (Just. (f o)))}
+  ValueDeducer
+  {:unwrap identity})
 
 ;; Vector and Queue, but not List, Conses, lazy-seqs, or other front-appending seqs
 (extend-type clojure.lang.Seqable
@@ -162,6 +167,13 @@
   FlexDeducer
   (handle-nested [nested]
     (apply concat nested)))
+
+(extend-type clojure.lang.IPersistentMap
+  ApplySpecial
+  (apply-to [this f]
+    (into {} (map (fn [[k v]] [k (f v)])) this))
+  ValueDeducer
+  (unwrap [this] (:value this)))
 
 (extend-type String
   ApplySpecial
@@ -197,6 +209,25 @@
                     deducer-fns
                     {:deduce deducer-fns})]
     #(map->AdHoc (assoc adhoc-fns :value %))))
+
+;; "Composing" deducers
+
+(defn compose
+  "Compose nested deducing fns. If you have some deducer Foo nested inside an Acc,
+  your deducing fn should not look like
+  (-> nested-arg op-on-nested ->Foo ->Acc) ;; BAD!
+  but instead you'd want to
+  (compose ->Acc (-> nested-arg op-on-nested ->Foo))"
+  [& fns]
+  (let [[inner next & outer] (reverse fns)]
+    (loop [f1 inner
+           f2 next
+           more outer]
+      (let [composed
+            (comp f2 #(deduce % f1))]
+        (if-let [[next-fn & more-fns] (seq more)]
+          (recur composed next-fn more-fns)
+          composed)))))
 
 ;; Writer
 
