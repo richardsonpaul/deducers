@@ -129,8 +129,6 @@
                            y ((compose (partial ->Acc " Did a thing") #(->Just (inc %))) x)]
                           ((compose (partial ->Acc " - Finis") #(->Just (+ 3 %))) y)))))
 
-(def vec-deducer (->deducer (fn [[x] f] (apply vector x (f x)))))
-
 (test/deftest test-nested-adhoc "An Acc with a nested adhoc nested inside (!)"
   (let [d (->deducer (fn [[x] f] [(f x)]))
         call-nested (fn [log-log log-str f value]
@@ -144,4 +142,24 @@
                       (d [7])))
                 (let-deduce [x (->Acc "Started logging; " (->Acc "Init; " (d [3])))
                              y (call-nested "Logged an op; " "Inc-ing; " inc x)]
-                             (call-nested "Finished logging" "Adding three" #(+ % 3) y))))))
+                            (call-nested "Finished logging" "Adding three" #(+ % 3) y))))))
+
+(test/deftest test-deduce-all
+  (let [deduce-sum (fn [summands & more]
+                     (let [new-summands (->> more flatten (into summands))]
+                       {:sum (apply + new-summands)
+                        :summands new-summands}))
+        deduce (fn [{:keys [summands]} f]
+                 (f summands))
+        apply-all (fn [{:keys [summands]} f more]
+                    (apply f summands (map :summands more)))
+        deducer (->deducer {:deduce deduce :apply-all apply-all})]
+    (test/is (= {:sum 10 :summands [4 2 1 3]}
+                (deducer->>= {:sum 0 :summands [4]}
+                             deducer
+                             #(deduce-sum % [2 1 3]))
+                (deduce-all-with deducer
+                  deduce-sum
+                  {:summands [4]}
+                  {:summands [2 1]}
+                  {:summands [3]})))))

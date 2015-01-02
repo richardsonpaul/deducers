@@ -5,7 +5,7 @@
 
 (defprotocol ApplySpecial
   "Specifies how to apply a deducer to a 'regular' fn."
-  (apply-to [this f]))
+  (apply-to [this f] "Apply a function f to this deducer"))
 
 (extend-protocol ApplySpecial
   clojure.lang.Fn
@@ -13,16 +13,24 @@
     (comp f this)))
 
 (defprotocol FlexDeducer
-  "A FlexDeducer needs to also provide ApplySpecial/apply-to
-   as part of its implementation. Applying a Deducer to a deducible
+  "A FlexDeducer needs to also provide ApplySpecial/apply-to as part
+  of its implementation. Applying (apply-to) a Deducer to a deducing
   function will end up returning a deducer with some kind of nesting.
   This function un-nests and folds in the return value with the nested one."
-  (handle-nested [nested]))
+  (handle-nested [nested] "Removes a level of nesting in the deducer"))
 
 (defprotocol SimpleDeducer
   "A deducer contained in one function that both applies the Deducer
-   to the fn arg, and fixes up the return value, all in one go."
-  (deduce [v f]))
+  to the fn arg, and fixes up the return value, all in one go. This ends
+  up being the same thing, in effect, as (comp handle-nested apply-to)"
+  (deduce [v f] "Applies the deducing function f to the deduced value v."))
+
+(defprotocol MultiDeducer
+  "A deducer that can apply multiple args to a function, and combine the results.
+  d is a deducer arg, whose type will be dispatched on, and f is the fn to call.
+  More is a seq of deducers (of the same type as d), and the fn will be called with
+  all of them. This fn does the call, and combines the results. See accum"
+  (apply-all [d f more]))
 
 (defprotocol ValueDeducer
   "A deducer-value nested inside an unwrappable deducer, used in deducer->>="
@@ -30,10 +38,23 @@
 
 (defprotocol Accumulator
   "An accumulator tells how to fold two values together. This can be viewed
-   like a fn passable to reduce, which takes two values and accumulates one
+  like a fn passable to reduce, which takes two values and accumulates one
   into the other. The fn \"accum\" takes two values of the same type and returns
   the same type, with the two args combined/folded together as the result."
   (accum [this x] "Accumulates this and x: see the Accumulator protocol"))
+
+(defn deduce-all
+  "Applies the deducing function f to the args (in \"parallel\") and combines them.
+  The args should all be the of the same type, and it should extend the ApplySpecial
+  and MultiDeducer protocols."
+  [f arg & args]
+  (apply-all arg f args))
+
+(defn deduce-all-with
+  "Like deduce-all, but wraps the dispatching type (the first arg) with the given
+  deducer constructor fn, and calls unwrap at the end. Sugar for using AdhocDeducer types."
+  [d f arg & args]
+  (unwrap (apply deduce-all f (d arg) args)))
 
 (defprotocol ^:private Binding
              "Dispatch >>= polymorphically"
@@ -55,7 +76,7 @@
   (-> mv (apply-to mf) handle-nested))
 
 (defn >>=
-  "Iteratively deduce the value mv throught the function(s) mfs."
+  "Iteratively deduce the value mv through the function(s) mfs."
   [mv & mfs]
   (bind mfs mv))
 
@@ -72,8 +93,7 @@
 
   This function reads like, \"Use 'value' in a 'deducer' and pass it through 'fs'\""
   [value deducer & fs]
-  (let [deduced (>>= (deducer value) fs)]
-    (unwrap deduced)))
+  (-> (deducer value) (>>= fs) unwrap))
 
 (defn- process [f args [[v b] & more] body]
   `(~f ~b ~@args
@@ -185,7 +205,7 @@
 
 ;; Ad-hoc
 
-(defrecord AdHoc [apply-to handle-nested deduce value]
+(defrecord AdHoc [apply-to handle-nested deduce apply-all value]
   ApplySpecial
   (apply-to [this f]
     (update this :value apply-to f))
@@ -196,7 +216,10 @@
   (deduce [this f]
     (if deduce
       (update this :value deduce f)
-      (deduce* this f))))
+      (deduce* this f)))
+  MultiDeducer
+  (apply-all [this f more]
+    (update this :value apply-all f more)))
 
 (defn ->deducer
   "Returns a fn that builds an ad-hoc deducer specified by the args:
@@ -213,11 +236,11 @@
 ;; "Composing" deducers
 
 (defn compose
-  "Compose nested deducing fns. If you have some deducer Foo nested inside an Acc,
+  "Compose nested deducing fns. If you have some deducer Foo nested inside a Bar,
   your deducing fn should not look like
-  (-> nested-arg op-on-nested ->Foo ->Acc) ;; BAD!
+  (-> nested-arg op-on-nested ->Foo ->Bar) ;; BAD!
   but instead you'd want to
-  (compose ->Acc (-> nested-arg op-on-nested ->Foo))"
+  (compose ->Bar (-> nested-arg op-on-nested ->Foo))"
   [& fns]
   (let [[inner next & outer] (reverse fns)]
     (loop [f1 inner
