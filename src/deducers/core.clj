@@ -159,7 +159,9 @@
   FlexDeducer
   (handle-nested [_])
   SimpleDeducer
-  (deduce [_ _]))
+  (deduce [_ _])
+  ValueDeducer
+  (unwrap [_] nil))
 
 (extend Object
   Maybe
@@ -260,6 +262,39 @@
   FlexDeducer
   (handle-nested [_]
     (assoc value :acc (accum acc (:acc value)))))
+
+(defrecord FlexWriter [acc value writer]
+  SimpleDeducer
+  (deduce [this f]
+    (if-let [[val & writes] (f value)]
+      (-> this
+          (assoc :value val)
+          (update :acc accum writes))))
+  ValueDeducer
+  (unwrap [_]
+    (binding [*out* writer]
+      (reduce #(apply println %2) nil (:value acc)))
+    (.close writer)
+    value))
+
+;; Reader
+
+(defrecord Reader [val env]
+  SimpleDeducer
+  (deduce [_ f]
+    (if-let [result (f val env)]
+      (Reader. result env)))
+  ValueDeducer
+  (unwrap [_] val))
+
+(defmacro ArityReader [x]
+  (let [args (repeatedly x gensym)]
+    `(defrecord ~(symbol (str "Reader-" x)) [~'value ~@args]
+       SimpleDeducer
+       (deduce [this# f#]
+         (update this# ~':value f# ~@args))
+       ValueDeducer
+       (unwrap [_] ~'value))))
 
 ;; Miscellanea
 
