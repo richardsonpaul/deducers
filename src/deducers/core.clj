@@ -63,6 +63,8 @@
                [seq-or-obj v d]))
 
 (extend-protocol Binding
+  nil
+  (bind [_ v] v)
   Object
   (bind [mf mv]
     (deduce mv mf))
@@ -72,13 +74,18 @@
       (recur mfs (bind mf v))
       v)))
 
-(defn- deduce* [mv mf]
+(defn deduce* [mv mf]
   (-> mv (apply-to mf) handle-nested))
 
 (defn >>=
   "Iteratively deduce the value mv through the function(s) mfs."
   [mv & mfs]
   (bind mfs mv))
+
+(defn >>-
+  "Like >>=, but it does apply-to instead of deduce"
+  [mv & fs]
+  (->> fs reverse (apply comp) (apply-to mv)))
 
 (defn deducer->>=
   "Like >>= for Adhoc (or any other deducer you want to wrap with). Instead of
@@ -141,7 +148,12 @@
   (apply-to [_ f]
     (-> (f just) Just.))
   FlexDeducer
-  (handle-nested [_] just))
+  (handle-nested [_] just)
+  MultiDeducer
+  (apply-all [_ f others]
+    (Just. (reduce #(f %1 (maybe? %2)) just others)))
+  Accumulator
+  (accum [this other] (Just. (accum just (maybe? other)))))
 
 (defmethod print-method Just [m w]
   (print-method (symbol (str m)) w))
@@ -161,7 +173,9 @@
   SimpleDeducer
   (deduce [_ _])
   ValueDeducer
-  (unwrap [_] nil))
+  (unwrap [_])
+  Accumulator
+  (accum [_ _]))
 
 (extend Object
   Maybe
@@ -170,18 +184,24 @@
   {:deduce deduce*}
   ApplySpecial
   {:apply-to (fn [o f] (Just. (f o)))}
+  MultiDeducer
+  {:apply-all (fn [o f more] (apply-all (maybe o) f more))}
   ValueDeducer
   {:unwrap identity})
 
-;; Vector and Queue, but not List, Conses, lazy-seqs, or other front-appending seqs
+;; Vector and Queue
 (extend-type clojure.lang.Seqable
   ApplySpecial
   (apply-to [this f]
     (into (empty this) (map f) this))
   FlexDeducer
   (handle-nested [this]
-    (into (empty this) (apply concat this))))
+    (into (empty this) (apply concat this)))
+  Accumulator
+  (accum [this other]
+    (into this other)))
 
+;; overrides the above for List, Conses, lazy-seqs, and other front-appending
 (extend-type clojure.lang.ISeq
   ApplySpecial
   (apply-to [this f]
@@ -295,6 +315,13 @@
          (update this# ~':value f# ~@args))
        ValueDeducer
        (unwrap [_] ~'value))))
+
+;; Accumulators
+(extend-protocol Accumulator
+  Boolean
+  (accum [this other] (boolean (and this other)))
+  Number
+  (accum [this other] (+ this other)))
 
 ;; Miscellanea
 
