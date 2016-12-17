@@ -1,8 +1,5 @@
-(ns deducers.core)
-
-;; FUNCTOR?
-(defprotocol Functor
-  (fmap [this f args]))
+(ns deducers.core
+  (:refer-clojure :exclude [map]))
 
 (defmacro ^:private definvokers [highest-arity]
   (let [args (repeatedly gensym)]
@@ -18,21 +15,41 @@
 
 (definvokers 25)
 
+(defmacro multidef [val & names]
+  `(do ~@(map (fn [name#]
+                `(def ~name# ~val)) names)))
+
+;; FUNCTOR
+(defprotocol Contextual
+  (constructor [_])
+  (map* [this f args]))
+(multidef constructor unit return pure)
+
 (defn apply*
-  "Can be used in a Deducer's fmap implementation to update its value"
+  "Can be used in a Deducer's map* implementation to update its value"
   [mv f args]
   ((-> args
        count
        invoker)
    f mv args))
 
+(defn map [f m]
+  (map* m f []))
+
 (defn- invoke* [mv [mf & args]]
-  (fmap mv mf args))
+  (map* mv mf args))
 
 (defn invoke
   "Invokes the function f with deducer v and args"
   [f v & args]
   (invoke* v (cons f args)))
+
+;; MONAD
+(defprotocol Deducer
+  "Needs to also implment Functor"
+  (join [this]))
+
+(def ^:dynamic return identity)
 
 (defn >>=
   "Passes the deducer through the function specifications
@@ -42,40 +59,26 @@
     (reduce invoke* mv mfs)))
 
 (defmacro =>
-  "Like ->, but using for deducers"
+  "Like ->, but for deducers"
   [mv & mfs]
   `(>>= ~mv ~@(map #(vec %) mfs)))
 
-;; MONAD
-(defprotocol Monad
-  "Needs to also implment Functor"
-  (join [this]))
-
-(def ^:dynamic return identity)
-
-(defmacro with [bindings & body]
-  (letfn [(binding-form [form-fn name expr]
-            (fn [inner-form]
-              (form-fn
-               `(join (invoke (fn [~name] ~inner-form) ~expr)))))
-          (fn-builder [form-fn bindings]
-            (if-let [[name expr & rest] (seq bindings)]
-              (recur (binding-form form-fn name expr) rest)
-              form-fn))]
-    ((fn-builder identity bindings) (cons `do body))))
+(defmacro with [binding-defs & body]
+  (letfn [(build-form [bindings]
+            (if-let [[name expr & more] (seq bindings)]
+              `(join (invoke (fn [~name]
+                               ~@(build-form more)) ~expr))
+              body))]
+    (build-form binding-defs)))
 
 ;; (defn invoke* [mv mf]
 ;;   (binding [return (pure mv)]
 ;;     (join (invoke mf mv))))
 
-;; ;; MONAD with return instead of fmap
+;; ;; MONAD with return instead of map*
 ;; (defprotocol Deducer
 ;;   "Needs to also implement New"
 ;;   (bind ))
-
-;; FUNCTOR/APPLICATIVE/MONAD
-(defprotocol Unit
-  (pure [_]))
 
 ;; (defn return)
 ;; (defn unit)
@@ -101,14 +104,24 @@
 
 ;; Implementations
 (extend-type nil
+  Unit
+  (pure [_])
   Functor
-  (fmap [_ _ _])
+  (map* [_ _ _])
   Monad
   (join [_]))
 
 (extend-type Object
+  Unit
+  (pure [_] identity)
   Functor
-  (fmap [this f args]
+  (map* [this f args]
     (apply f this args))
   Monad
   (join [this] this))
+
+;; java.util.Collection clojure.lang.Sequential Seqable IPersistentCollection Counted(?)
+(extend-type clojure.lang.IPersistentCollection ;; implements empty
+  Functor
+  (map* [this f args]
+    (reduce #(conj %1 (f %2)) (empty this) this)))
