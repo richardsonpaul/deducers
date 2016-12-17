@@ -1,6 +1,6 @@
 (ns deducers.core)
 
-;; FUNCTOR
+;; FUNCTOR?
 (defprotocol Functor
   (fmap [this f args]))
 
