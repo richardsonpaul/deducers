@@ -71,6 +71,23 @@
               body))]
     (build-form binding-defs)))
 
+(defrecord Writer [value log]
+  Unit (pure [_] (Writer. nil nil))
+  Functor (map* [this f args] (update this :value apply* f args))
+  Monad (join [this] (update value :log into log)))
+
+(defn log [x] (->Writer nil [x]))
+
+(defn log-and-return [l v]
+  (->Writer v (list l)))
+
+(defrecord Tracer [x]
+  Unit (pure [_] ->Tracer)
+  Functor (map* [this f args]
+            (apply println "Calling" f "with" x args)
+            (update this :x apply* f args))
+  Monad (join [this] x))
+
 ;; (defn invoke* [mv mf]
 ;;   (binding [return (pure mv)]
 ;;     (join (invoke mf mv))))
