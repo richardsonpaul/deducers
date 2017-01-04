@@ -1,6 +1,10 @@
 (ns deducers.core
   (:refer-clojure :exclude [map]))
 
+;; rename: unit, pure, monad; join? maybe that's OK
+;; deduce instead of >>=, =>, join, deducer->, in->, with->, via->
+;; with renamed to deduce?
+
 (defmacro ^:private definvokers [highest-arity]
   (let [args (repeatedly gensym)]
     `(defn ~'invoker [n#]
@@ -16,14 +20,8 @@
 (definvokers 25)
 
 (defmacro multidef [val & names]
-  `(do ~@(map (fn [name#]
-                `(def ~name# ~val)) names)))
-
-;; FUNCTOR
-(defprotocol Contextual
-  (constructor [_])
-  (map* [this f args]))
-(multidef constructor unit return pure)
+  `(do ~@(clojure.core/map (fn [name#]
+                             `(def ~name# ~val)) names)))
 
 (defn apply*
   "Can be used in a Deducer's map* implementation to update its value"
@@ -33,16 +31,66 @@
        invoker)
    f mv args))
 
-(defn map [f m]
-  (map* m f []))
+;; FUNCTOR
+(defprotocol Mapping
+  "Maps a special value against a bare function"
+  (map* [this f args] "returns the resulting value in the same context"))
 
-(defn- invoke* [mv [mf & args]]
-  (map* mv mf args))
+(defn map [f v & m]
+  (map* v f m))
 
 (defn invoke
   "Invokes the function f with deducer v and args"
   [f v & args]
-  (invoke* v (cons f args)))
+  (map* v f args))
+
+;; invoke* - applicative protocol
+;; apply* - helper
+;; ? apply-to invoke-on invoke-with invoke-in apply-in apply-with
+;; update* bind*
+
+;; return and pure are equivalent, not unit
+;; unit is ()
+;; mzero and mplus are MonadPlus, corresponding to
+;; mempty and mappend in Monoid; mconcat is just mappend in reduce
+
+(defprotocol Contextual
+  "Details how to invoke a fn in a context against a value in a context, and how to put
+  a bare value in context"
+  (constructor [_] "Returns a fn that puts a bare value in a minimal context")
+  (merge* [v]))
+
+(defn partial*
+  "Creates a partial function inside a deducer context
+  f is the function to put in context
+  c is the constructor for the deducer"
+  [c f & args]
+  (c (apply partial f args)))
+
+(defn- invoke-with [f p x args]
+  (merge* (map #(map* x (f %) args) p)))
+
+(defn invoke-deducer
+  "invokes the partial-deducer with an optional final arg
+  p is the partial deducer, x is the deducer arg"
+  ([p]
+   (map #(%) p))
+  ([p x & args]
+   (invoke-with identity p x args)))
+
+(defn add-partial-args
+  "adds an arg to a partial-deducer
+  p is the partial-in-context
+  x is the deducer arg to add to the partial"
+  [p x & args]
+  (invoke-with (partial partial partial) p x args))
+
+(defn <*> [f & mvs]
+  (loop [[v & vs] mvs
+         d (partial* (constructor v) f)]
+    (if (seq vs)
+      (recur vs (add-partial-arg d v))
+      (invoke-deducer d v))))
 
 ;; MONAD
 (defprotocol Deducer
@@ -54,9 +102,10 @@
 (defn >>=
   "Passes the deducer through the function specifications
   mf should be a sequence of mf followed by args"
-  [mv & mfs]
-  (binding [return (pure mv)]
-    (reduce invoke* mv mfs)))
+  ([mv [mf & args]]
+   (map* mv mf args))
+  ([mv mf & mfs]
+   (reduce >>= (>>= mv mf) mfs)))
 
 (defmacro =>
   "Like ->, but for deducers"
@@ -70,23 +119,6 @@
                                ~@(build-form more)) ~expr))
               body))]
     (build-form binding-defs)))
-
-(defrecord Writer [value log]
-  Unit (pure [_] (Writer. nil nil))
-  Functor (map* [this f args] (update this :value apply* f args))
-  Monad (join [this] (update value :log into log)))
-
-(defn log [x] (->Writer nil [x]))
-
-(defn log-and-return [l v]
-  (->Writer v (list l)))
-
-(defrecord Tracer [x]
-  Unit (pure [_] ->Tracer)
-  Functor (map* [this f args]
-            (apply println "Calling" f "with" x args)
-            (update this :x apply* f args))
-  Monad (join [this] x))
 
 ;; (defn invoke* [mv mf]
 ;;   (binding [return (pure mv)]
@@ -121,24 +153,20 @@
 
 ;; Implementations
 (extend-type nil
-  Unit
-  (pure [_])
-  Functor
+  Mapping
   (map* [_ _ _])
-  Monad
+  Deducer
   (join [_]))
 
 (extend-type Object
-  Unit
-  (pure [_] identity)
-  Functor
+  Mapping
   (map* [this f args]
     (apply f this args))
-  Monad
+  Deducer
   (join [this] this))
 
 ;; java.util.Collection clojure.lang.Sequential Seqable IPersistentCollection Counted(?)
 (extend-type clojure.lang.IPersistentCollection ;; implements empty
-  Functor
+  Contextual
   (map* [this f args]
     (reduce #(conj %1 (f %2)) (empty this) this)))
