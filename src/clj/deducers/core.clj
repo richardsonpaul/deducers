@@ -55,24 +55,22 @@
 
 (defn <*> [f & [v & vs]]
   (let [bind (fn [x a] (update x :vs conj a))
-        invoke (fn [x] (map* (:d x) (:f x) (:vs x)))
         bind-with (fn [a i]
                     (map #(bind i %) a))
         add-binding (fn [d v]
                       (map #(bind-with v %) d))
         insert-binding (comp join add-binding)
-        initial (map #(->Invocation f % []) v)]
-    (map invoke (reduce #(fold %1 %2 insert-arg) initial vs))))
+        initial (map #(->Invocation f % []) v)
+        invoke (fn [x] (map* (:d x) (:f x) (:vs x)))]
+    (map invoke (reduce #(fold %1 %2 insert-binding) initial vs))))
 
-(defrecord NumberFilter[x y]
+(defrecord NumberFilter[x]
   Contextual
   (map* [this f args]
     (update this :x apply* f args))
   Deducer
-  (constructor [_] #(->NumberFilter % []))
-  (join [this] (-> this
-                   (update :y into (:y x))
-                   (update :x :x)))
+  (constructor [_] ->NumberFilter)
+  (join [this] (update this :x :x))
   (fold [this v k]
     (if v
       (k this v)
@@ -83,10 +81,10 @@
 (defn >>=
   "Passes the deducer through the function specifications
   mf should be a sequence of mf followed by args"
-  ([mv [mf & args]]
-   (join (map* mv mf args)))
-  ([mv mf & mfs]
-   (reduce >>= (>>= mv mf) mfs)))
+  [mv mf & mfs]
+  (letfn [(bind [mv [mf & args]]
+            (join (map* mv mf args)))]
+    (reduce bind (bind mv mf) mfs)))
 
 (defmacro =>
   "Like ->, but for deducers"
