@@ -1,9 +1,5 @@
 (ns deducers.core
-  (:refer-clojure :exclude [map merge]))
-
-;; rename: unit, pure, monad; join? maybe that's OK
-;; deduce instead of >>=, =>, join, deducer->, in->, with->, via->
-;; with renamed to deduce?
+  (:refer-clojure :exclude [map ->]))
 
 (defmacro ^:private definvokers [highest-arity]
   (let [args (repeatedly gensym)]
@@ -19,21 +15,17 @@
 
 (definvokers 25)
 
-(defmacro multidef [val & names]
-  `(do ~@(clojure.core/map (fn [name#]
-                             `(def ~name# ~val)) names)))
-
 (defn apply*
   "Can be used in a Deducer's map* implementation to update its value"
   [mv f args]
-  ((-> args
-       count
-       invoker)
+  ((clojure.core/-> args
+                    count
+                    invoker)
    f mv args))
 
 ;; FUNCTOR
 (defprotocol Contextual
-  "Maps a special value against a bare function"
+  "Maps a contextual value against an ordinary function, updating the value in the context"
   (map* [this f args] "returns the resulting value in the same context"))
 
 (defn map [f v & m]
@@ -47,22 +39,26 @@
 (defprotocol Deducer
   "dealing with a value in context"
   (constructor [_] "Returns a fn that puts a bare value in a minimal context")
-  (join [v] "joins a nested context with its parent, un-nesting it")
-  (fold [this other accept] "if the other value can be folded with this, call accept
+  (join [this] "joins a nested context with its parent (\"this\"), un-nesting it")
+  (fold [this other accept] "if the other value can be joined with this, call accept;
       if not, can return this or nil, as appropriate"))
 
-(defrecord Invocation [f d vs])
+(defrecord Invocation [f d vs]
+  Contextual
+  (map* [this f _] (f this)))
 
-(defn <*> [f & [v & vs]]
-  (let [bind (fn [x a] (update x :vs conj a))
-        bind-with (fn [a i]
-                    (map #(bind i %) a))
-        add-binding (fn [d v]
-                      (map #(bind-with v %) d))
-        insert-binding (comp join add-binding)
+(defn invoke [f & [v & vs]]
+  (let [invoker-arg (fn [i a]
+                      (map #(update i :vs conj %) a))
+        add-arg (fn [d a]
+                  (map #(invoker-arg % a) d))
+        insert-arg (comp join add-arg)
         initial (map #(->Invocation f % []) v)
-        invoke (fn [x] (map* (:d x) (:f x) (:vs x)))]
-    (map invoke (reduce #(fold %1 %2 insert-binding) initial vs))))
+        execute-invocation (fn [x] (map* (:d x) (:f x) (:vs x)))]
+    (map execute-invocation (reduce #(fold %1 %2 insert-arg) initial vs))))
+;; todo: make "accept" be a thunk, instead of the deducer calling it with itself and v
+;; should it do any work? e.g. return a merged/joined "this" and a bare val? Might be faster, but more annoying to implement;
+;; plus then they'll have to call it properly and everything. The way I have it is easy.
 
 (defrecord NumberFilter[x]
   Contextual
@@ -75,29 +71,39 @@
     (if v
       (k this v)
       this)))
+(def nf ->NumberFilter)
+;; for writer, we output a Logger. It concats strings, and then on a special call, outputs them - or on join?
+;; for reader, we use a Input. It has some strings, and gives them to the function (how?)
+;; on a special call, it will read its stuff from stdin. But ... reverse?
+;; When constructed, it can read a stream on a special call (or be built with explicit strings)
+;; Then, on a call, it... does a binding around the fn?
+;; Receives a fn as a result of something that wants to read, and puts the strings into it?
 
 (def ^:dynamic return identity)
 
-(defn >>=
+(defn deduce
   "Passes the deducer through the function specifications
   mf should be a sequence of mf followed by args"
-  [mv mf & mfs]
+  [mv & mfs]
   (letfn [(bind [mv [mf & args]]
             (join (map* mv mf args)))]
-    (reduce bind (bind mv mf) mfs)))
+    (reduce bind mv mfs)))
 
-(defmacro =>
+(defmacro with->
   "Like ->, but for deducers"
   [mv & mfs]
-  `(>>= ~mv ~@(map #(vec %) mfs)))
+  `(deduce ~mv ~@(map #(vec %) mfs)))
 
+;; rename to deduce, or?
+;; make it explicit there's a deducer context? Just note it in the doc, that all rhs of bindings must be the same deducer?
 (defmacro with [binding-defs & body]
   (letfn [(build-form [bindings]
             (if-let [[name expr & more] (seq bindings)]
-              `(join (invoke (fn [~name]
-                               ~@(build-form more)) ~expr))
+              `(join (map (fn [~name]
+                            ~@(build-form more)) ~expr))
               body))]
-    (build-form binding-defs)))
+    `(join ~(build-form binding-defs))))
+;; do a final join; make a comp of join & map?
 
 ;; (defn invoke* [mv mf]
 ;;   (binding [return (pure mv)]
@@ -144,9 +150,9 @@
   Deducer
   (constructor [_] identity)
   (join [this] this)
-  (folding [this v k]
+  (fold [this v k]
     (if v
-      (k v)
+      (k this v)
       this)))
 
 (defn- map-coll [coll f args]
@@ -160,3 +166,10 @@
 (extend-type clojure.lang.IPersistentCollection
   Contextual
   (map* [this f args] (map-coll (reverse this) f args)))
+
+;; aliases to haskell names
+(def fmap map)
+(def <*> invoke)
+(def ^:macro deducer-> #'with->)
+(def ^:macro >>= #'deducer->)
+(def ^:macro -> #'deducer->)
