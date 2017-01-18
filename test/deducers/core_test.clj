@@ -1,165 +1,48 @@
 (ns deducers.core-test
-  (:require [clojure.test.check :as tc]
-            [clojure.test.check.generators :as gen]
-            [clojure.test.check.properties :as prop]
-            [clojure.test.check.clojure-test :refer [defspec]]
-            [clojure.test :as test]
-            [deducers.core :refer :all]))
+  (:refer-clojure :exclude [map])
+  (:require
+   [deducers.core :refer :all]
+   [clojure.test :as test :refer [deftest is]]))
 
-(clojure.test.check.clojure-test/defspec apply-special-test 100
-  (prop/for-all [v (gen/vector gen/int)]
-    (let [result (apply-to v inc)]
-      (= result (map inc v))
-      (vector? result))))
+;; To test some deducer functions
+(defrecord ^:private NumberFilter [x y]
+  Contextual
+  (map* [this f args]
+    (update this :x apply* f args))
+  Deducer
+  (join [this] (-> this
+                   (update :y concat (:y x))
+                   (update :x :x)))
+  (fold [this v k]
+    (if (-> v type (= NumberFilter))
+      (k)
+      this)))
 
-(defn apply-special?
-  "Test an object to see if it adheres to the apply-special laws.
-  f and g are functions that operate on the apply-special"
-  [ftor f g]
-  (let [id (apply-to ftor identity)
-        composed (apply-to ftor (comp f g))
-        nested (apply-to (apply-to ftor g) f)
-        follows-laws? (and (= id (identity ftor)) (= composed nested))]
-    (when-not follows-laws?
-      (println "Identity apply-toped:" id)
-      (println "Composed:" (str composed "; Nested:") nested))
-    follows-laws?))
+(defn nf [x] (->NumberFilter x [(str x)]))
 
-(defspec test-apply-special-vector 100
-  (prop/for-all [v (gen/vector gen/int)]
-    (apply-special? v inc #(* 2 %))))
+(deftest test-invoke "Test invoking some things"
+  (let [expected (->NumberFilter 6 ["1" "2" "3"])]
+    (is (nil? (invoke + nil)))
+    (is (= 6
+           (invoke + 1 2 3)))
+    (is (nil? (invoke + 1 nil 2 3)))
+    (is (= expected
+           (invoke + (nf 1) (nf 2) (nf 3))))
+    (is (= expected
+           (invoke + (nf 1) nil (nf 2) (nf 3))))
+    (is (= expected
+           (invoke + nil nil (nf 1) (nf 2) (nf 3))))))
 
-(defspec test-apply-special-list 100
-  (prop/for-all [l (gen/list gen/int)]
-    (apply-special? l inc #(* 2 %))))
-
-(defspec test-apply-special-map 100
-  (prop/for-all [m (gen/map gen/keyword gen/int)]
-    (apply-special? m inc #(* 2 %))))
-
-(defspec test-apply-special-just 100
-  (prop/for-all [m gen/int]
-    (apply-special? (->Just m) inc #(* 2 %))))
-
-(test/deftest test-apply-special-nil
-  (test/is (apply-special? nil inc #(* 2 %))))
-
-(defspec test-apply-special-fn 100
-  (let [*3 #(* 3 %)
-        plus-100 #(+ 100 %)
-        fun (apply-to plus-100 *3)]
-    (prop/for-all [i gen/int]
-       (= (fun i) ((comp *3 plus-100) i)))))
-
-(defspec test-apply-special-seq 100
-  (prop/for-all [m (gen/list gen/int)]
-    (apply-special? (map inc m) inc #(* 2 %))))
-
-(defspec test-apply-special-queue 100
-  (prop/for-all [m (gen/list gen/int)]
-    (apply-special? (into clojure.lang.PersistentQueue/EMPTY m) inc #(* 2 %))))
-
-(test/deftest test-deduce-with-acc
-  (let [start "Started with 3, "
-        middle "incremented, "
-        end "then added 2!"]
-    (test/is (= (->Acc (str start middle end) 6)
-                (let-deduce [x (->Acc start 3)
-                             y (->Acc middle (inc x))]
-                         (->Acc end (+ y 2)))))))
-
-(test/deftest test-safe-let
-  (let [let-test #(let-safe [x % y (+ x 4)] (* x y))]
-    (test/is (= 21 (let-test 3)))
-    (test/is (nil? (let-test nil)))))
-
-(test/deftest test-implicit-context
-  (test/is (= [[3 0 0] [3 1 0] [3 1 1] [3 2 0] [3 2 1] [3 2 2]]
-              (let-deduce [x 3 y (range x) z (range (inc y))] (list [x y z])))))
-
-(test/deftest test-vector-context
-  (test/is (= [[3 0 0] [3 1 0] [3 1 1] [3 2 0] [3 2 1] [3 2 2]]
-              (let-deduce [x [3] y (range x) z (range (inc y))] (list [x y z])))))
-
-(test/deftest test-adhoc
-  (let [events [{:damage 3}
-                {:heal 4}
-                {:damage 2}
-                {:foo :bar}
-                {:super-heal 2}]
-        guy {:health 10}
-        process (fn [event-type merge-fn]
-                  (fn [events]
-                    (let [amount (-> (comp (filter event-type) (map event-type))
-                                     (transduce + events))]
-                          [{:merge-fn merge-fn :health amount}
-                           (remove event-type events)])))
-        damage (process :damage -)
-        heal (process :heal +)
-        super-heal (process :super-heal *)
-        apply-to (fn [[c e] f]
-                   [c (f e)])
-        handle-nested (fn [[og [{:keys [merge-fn health]} events]]]
-                        [(merge-with merge-fn og {:health health}) events])
-        adhoc-gen {:apply-to apply-to :handle-nested handle-nested}
-        deduce (fn [[c e] f]
-                 (let [[m new-e] (f e)
-                       {:keys [merge-fn health]} m]
-                   [(merge-with merge-fn c {:health health}) new-e]))
-        expected [{:health 18} [{:foo :bar}]]]
-    (test/is (= expected
-                (-> [guy events]
-                    (deducer->>= (->deducer adhoc-gen) damage heal super-heal))))
-    (test/is (= expected
-                (-> [guy events]
-                    (deducer->>= (->deducer deduce) damage heal super-heal))))))
-
-(test/deftest test-deduce-with
-  (letfn [(func [[x] f] (apply vector x (f x)))]
-    (test/is
-     (= [3 4 12]
-        (deduce-with (->deducer func)
-                     [x [3]
-                      y (-> x inc vector)]
-                     [(* x y)])))))
-
-(test/deftest test-nested "An Acc with a Just inside"
-  (test/is (= (->Acc "Init; Did a thing - Finis" (->Just 7))
-              (let-deduce [x (->> (->Just 3) (->Acc "Init;"))
-                           y ((compose (partial ->Acc " Did a thing") #(->Just (inc %))) x)]
-                          ((compose (partial ->Acc " - Finis") #(->Just (+ 3 %))) y)))))
-
-(test/deftest test-nested-adhoc "An Acc with a nested adhoc nested inside (!)"
-  (let [d (->deducer (fn [[x] f] [(f x)]))
-        call-nested (fn [log-log log-str f value]
-                        (let [deducer-from (compose
-                                            (partial ->Acc log-log)
-                                            (partial ->Acc log-str)
-                                            f)]
-                          (deducer-from value)))]
-    (test/is (= (->Acc "Started logging; Logged an op; Finished logging"
-                   (->Acc "Init; Inc-ing; Adding three"
-                      (d [7])))
-                (let-deduce [x (->Acc "Started logging; " (->Acc "Init; " (d [3])))
-                             y (call-nested "Logged an op; " "Inc-ing; " inc x)]
-                            (call-nested "Finished logging" "Adding three" #(+ % 3) y))))))
-
-(test/deftest test-deduce-all
-  (let [deduce-sum (fn [summands & more]
-                     (let [new-summands (->> more flatten (into summands))]
-                       {:sum (apply + new-summands)
-                        :summands new-summands}))
-        deduce (fn [{:keys [summands]} f]
-                 (f summands))
-        apply-all (fn [{:keys [summands]} f more]
-                    (apply f summands (map :summands more)))
-        deducer (->deducer {:deduce deduce :apply-all apply-all})]
-    (test/is (= {:sum 10 :summands [4 2 1 3]}
-                (deducer->>= {:sum 0 :summands [4]}
-                             deducer
-                             #(deduce-sum % [2 1 3]))
-                (deduce-all-with deducer
-                  deduce-sum
-                  {:summands [4]}
-                  {:summands [2 1]}
-                  {:summands [3]})))))
+(deftest test-map "Test mapping some stuff"
+  (let [expected (->NumberFilter 5 (map str [2 3]))]
+    (is (= nil (map inc nil)))
+    (is (= 7 (map inc 6)))
+    (is (= (->NumberFilter 6 ["5"])
+           (map inc (nf 5))))
+    (let [expected [2 3 4]]
+      (is (let [actual (map inc [1 2 3])]
+            (and (= expected actual)
+                 (vector? actual))))
+      (is (let [actual (map inc (list 1 2 3))]
+            (and (= expected actual)
+                 (list? actual)))))))
