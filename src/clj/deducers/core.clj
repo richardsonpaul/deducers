@@ -44,24 +44,29 @@
 (defprotocol Deducer
   "a value in special \"computational\" context"
   (join [this] "joins a nested context with its parent (\"this\"), un-nesting it")
-  (fold [this other accept] "if the other value can be joined with this, call accept;
+  (fold [this other merge] "if the other value can be joined with this, call accept;
       if not, can return this or nil, as appropriate"))
 
-(defrecord Invocation [f d vs]
+(def bind (comp join map))
+
+(defrecord ^:private Arglist [xs]
   Contextual
-  (map* [this f _] (f this)))
+  (map* [this f args]
+    (update this :xs apply* f args))
+  )
 
 (defn invoke [f & [v & vs]]
-  (let [invoker-arg (fn [i a]
-                      (map #(update i :vs conj %) a))
-        add-arg (fn [d a]
-                  (map #(invoker-arg % a) d))
-        bind-arg (comp join add-arg)
-        insert-arg (fn [d a]
-                     (fold d a #(bind-arg d a)))
-        initial (map #(->Invocation f % []) v)
-        execute-invocation (fn [x] (map* (:d x) (:f x) (:vs x)))]
-    (map execute-invocation (reduce insert-arg initial vs))))
+  (let [initial {:f f :args (map #(->Arglist [%]) v)}
+        add-arg (fn [args x]
+                  (map #(conj % x) args))
+        add-arg-in (fn [argv dx]
+                     (map #(add-arg argv %) dx))
+        bind-arg (fn [dori dy]
+                   (fold dori dy (partial bind add-arg-in)))
+        insert-arg (fn [i x] (update i :args bind-arg x))
+        evaluate (fn [{:keys [f args]}]
+                   (map #(apply f (:xs %)) args))]
+    (evaluate (reduce insert-arg initial vs))))
 
 (defn deduce
   "Passes the deducer through the function specifications
@@ -105,7 +110,8 @@
   (map* [_ _ _])
   Deducer
   (join [_])
-  (fold [_ _ _]))
+  (fold [_ v k]
+    (when v (fold v nil k))))
 
 (extend-type Object
   Contextual

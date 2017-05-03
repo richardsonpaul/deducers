@@ -15,7 +15,7 @@
                    (update :x :x)))
   (fold [this v k]
     (if (-> v type (= NumberFilter))
-      (k)
+      (k this v)
       this)))
 
 (defn nf [x] (->NumberFilter x [(str x)]))
